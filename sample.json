@@ -1,0 +1,23 @@
+{
+  "start": "start",
+  "nodes": [
+    {
+      "id": "start",
+      "text": "你来到岔路口。",
+      "options": [
+        { "text": "向左走", "target": "forest" },
+        { "text": "向右走", "target": "river" }
+      ]
+    },
+    {
+      "id": "forest",
+      "text": "你到了森林。",
+      "options": []
+    },
+    {
+      "id": "river",
+      "text": "你到了河边。",
+      "options": []
+    }
+  ]
+}
