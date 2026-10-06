@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""本地对话命令行程序：校验对话 JSON 结构，并进行一次分支预览。
+"""本地对话命令行程序：校验对话 JSON 结构，进行一次分支预览或只读节点查看。
 
 用法：
     python dialogue.py validate <文件路径>
     python dialogue.py preview <文件路径> --choice <选项编号> [--node <节点编号>]
+    python dialogue.py inspect <文件路径> [--node <节点编号>]
 
-省略 --node 时从 start 出发；--choice 与 --node 两对参数顺序可互换。
+preview 省略 --node 时从 start 出发；--choice 与 --node 两对参数顺序可互换。
+inspect 省略 --node 时查看 start 指定的节点，只输出该节点信息，不选择选项。
 仅使用 Python 3 标准库，无需网络、外部账号或额外依赖。
 """
 
@@ -16,7 +18,8 @@ USAGE = (
     "用法：\n"
     "  python dialogue.py validate <文件路径>\n"
     "  python dialogue.py preview <文件路径> --choice <选项编号> "
-    "[--node <节点编号>]"
+    "[--node <节点编号>]\n"
+    "  python dialogue.py inspect <文件路径> [--node <节点编号>]"
 )
 
 
@@ -185,6 +188,46 @@ def cmd_preview(path, choice_arg, node_arg=None):
     return 0
 
 
+def cmd_inspect(path, node_arg=None):
+    # 查看前先完成整份文件校验（含不可达节点的结构或引用错误）。
+    data = load_dialogue(path)
+    try:
+        start, nodes = validate_dialogue(data)
+    except DialogueError as exc:
+        fail("校验失败：{}".format(exc))
+
+    # 省略 --node 时查看 start 指定的节点；节点编号按原字符串精确匹配。
+    node_id = start if node_arg is None else node_arg
+    node = find_node(nodes, node_id)
+    if node is None:
+        fail("文件中不存在编号为 {!r} 的节点".format(node_id))
+
+    # 只读查看：不选择选项、不沿 target 继续访问、不保存状态、不改写文件。
+    result = {
+        "id": node["id"],
+        "text": node["text"],
+        "options": [
+            {"choice": i + 1, "text": option["text"], "target": option["target"]}
+            for i, option in enumerate(node["options"])
+        ],
+    }
+    sys.stdout.write(json.dumps(result, ensure_ascii=False) + "\n")
+    return 0
+
+
+def parse_inspect_args(rest):
+    """解析 inspect 可选的 --node 键值对（至多一次，不接受其他参数）。
+
+    rest 为空表示省略 --node；形如 ['--node', 'n'] 时返回节点编号；
+    多余、重复或缺值参数都按既有用法错误处理，在读取文件前结束。
+    """
+    if not rest:
+        return None
+    if len(rest) == 2 and rest[0] == "--node":
+        return rest[1]
+    fail(USAGE)
+
+
 def parse_preview_args(rest):
     """解析 preview 的 --choice/--node 键值对（顺序可互换、各至多一次）。
 
@@ -221,6 +264,11 @@ def main(argv):
             fail(USAGE)
         choice_arg, node_arg = parse_preview_args(argv[3:])
         return cmd_preview(argv[2], choice_arg, node_arg)
+    if command == "inspect":
+        if len(argv) < 3:
+            fail(USAGE)
+        node_arg = parse_inspect_args(argv[3:])
+        return cmd_inspect(argv[2], node_arg)
     fail(USAGE)
 
 

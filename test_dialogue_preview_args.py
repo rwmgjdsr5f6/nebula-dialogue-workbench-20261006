@@ -27,12 +27,14 @@ DIALOGUE = PROJECT_DIR / "dialogue.py"
 SAMPLE = PROJECT_DIR / "sample.json"
 
 # 既有的完整用法文字（fail() 会在末尾补一个换行）。在此硬编码以固定
-# 现有文案：源码若改动该文案，本回归测试应失败。
+# 现有文案：源码若改动该文案，本回归测试应失败。新增 inspect 命令后
+# 用法文字同步追加对应行。
 USAGE_TEXT = (
     "用法：\n"
     "  python dialogue.py validate <文件路径>\n"
     "  python dialogue.py preview <文件路径> --choice <选项编号> "
     "[--node <节点编号>]\n"
+    "  python dialogue.py inspect <文件路径> [--node <节点编号>]\n"
 )
 
 
