@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""本地对话命令行程序：校验对话 JSON 结构，并从起点进行一次分支预览。
+"""本地对话命令行程序：校验对话 JSON 结构，并进行一次分支预览。
 
 用法：
     python dialogue.py validate <文件路径>
-    python dialogue.py preview <文件路径> --choice <选项编号>
+    python dialogue.py preview <文件路径> --choice <选项编号> [--node <节点编号>]
 
+省略 --node 时从 start 出发；--choice 与 --node 两对参数顺序可互换。
 仅使用 Python 3 标准库，无需网络、外部账号或额外依赖。
 """
 
@@ -14,7 +15,8 @@ import sys
 USAGE = (
     "用法：\n"
     "  python dialogue.py validate <文件路径>\n"
-    "  python dialogue.py preview <文件路径> --choice <选项编号>"
+    "  python dialogue.py preview <文件路径> --choice <选项编号> "
+    "[--node <节点编号>]"
 )
 
 
@@ -139,35 +141,71 @@ def cmd_validate(path):
     return 0
 
 
-def cmd_preview(path, choice_arg):
-    # 预览前先完成整份文件校验。
+def cmd_preview(path, choice_arg, node_arg=None):
+    # 预览前先完成整份文件校验（未选中分支的结构或引用错误也在此暴露）。
     data = load_dialogue(path)
     try:
         start, nodes = validate_dialogue(data)
     except DialogueError as exc:
         fail("校验失败：{}".format(exc))
 
-    start_node = find_node(nodes, start)
-    options = start_node["options"]
+    # 省略 --node 时仍从 start 出发；节点编号按原字符串精确匹配。
+    origin_id = start if node_arg is None else node_arg
+    origin_node = find_node(nodes, origin_id)
+    if origin_node is None:
+        fail("文件中不存在编号为 {!r} 的节点".format(origin_id))
+    options = origin_node["options"]
 
     try:
         choice = int(choice_arg)
     except ValueError:
-        fail("--choice 的值 {!r} 无法解析为整数（起点编号为 {!r}）".format(
-            choice_arg, start))
+        if node_arg is None:
+            fail("--choice 的值 {!r} 无法解析为整数（起点编号为 {!r}）".format(
+                choice_arg, origin_id))
+        fail("--choice 的值 {!r} 无法解析为整数（出发节点编号为 {!r}）".format(
+            choice_arg, origin_id))
 
     if not options:
-        fail("--choice {} 无效：起点 {!r} 是结尾节点，没有有效选项".format(
-            choice, start))
+        if node_arg is None:
+            fail("--choice {} 无效：起点 {!r} 是结尾节点，没有有效选项".format(
+                choice, origin_id))
+        fail("--choice {} 无效：出发节点 {!r} 是结尾节点，没有有效选项".format(
+            choice, origin_id))
     if not 1 <= choice <= len(options):
-        fail("--choice {} 不在起点 {!r} 的有效选项编号范围 1 到 {} 内".format(
-            choice, start, len(options)))
+        if node_arg is None:
+            fail("--choice {} 不在起点 {!r} 的有效选项编号范围 1 到 {} 内".format(
+                choice, origin_id, len(options)))
+        fail("--choice {} 不在出发节点 {!r} 的有效选项编号范围 1 到 {} 内".format(
+            choice, origin_id, len(options)))
 
     # 选项编号从 1 开始，依据数组顺序确定；只输出目标节点文字，不前进、不改写文件。
     target_id = options[choice - 1]["target"]
     target_node = find_node(nodes, target_id)
     sys.stdout.write(target_node["text"] + "\n")
     return 0
+
+
+def parse_preview_args(rest):
+    """解析 preview 的 --choice/--node 键值对（顺序可互换、各至多一次）。
+
+    rest 形如 ['--choice', '2', '--node', 'n']；任何多余、
+    重复或缺值参数都按既有用法错误处理。
+    """
+    values = {}
+    i = 0
+    while i < len(rest):
+        name = rest[i]
+        if name not in ("--choice", "--node"):
+            fail(USAGE)
+        if name in values:
+            fail(USAGE)
+        if i + 1 >= len(rest):
+            fail(USAGE)
+        values[name] = rest[i + 1]
+        i += 2
+    if "--choice" not in values:
+        fail(USAGE)
+    return values["--choice"], values.get("--node")
 
 
 def main(argv):
@@ -179,9 +217,10 @@ def main(argv):
             fail(USAGE)
         return cmd_validate(argv[2])
     if command == "preview":
-        if len(argv) != 5 or argv[3] != "--choice":
+        if len(argv) < 5:
             fail(USAGE)
-        return cmd_preview(argv[2], argv[4])
+        choice_arg, node_arg = parse_preview_args(argv[3:])
+        return cmd_preview(argv[2], choice_arg, node_arg)
     fail(USAGE)
 
 
