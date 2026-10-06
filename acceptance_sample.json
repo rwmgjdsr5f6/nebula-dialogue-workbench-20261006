@@ -1,0 +1,37 @@
+{
+  "start": "start",
+  "nodes": [
+    {
+      "id": "start",
+      "text": "你站在门前。",
+      "options": [
+        { "text": "推开门", "target": "middle" }
+      ]
+    },
+    {
+      "id": "middle",
+      "text": "你走进走廊，尽头有两扇门。",
+      "options": [
+        { "text": "进左边的门", "target": "end_a" },
+        { "text": "进右边的门", "target": "end_b" }
+      ]
+    },
+    {
+      "id": "end_a",
+      "text": "结局一：你到了花园。",
+      "options": []
+    },
+    {
+      "id": "end_b",
+      "text": "结局二：你到了高塔。",
+      "options": []
+    },
+    {
+      "id": "hidden",
+      "text": "无人知晓的房间。",
+      "options": [
+        { "text": "留在原地", "target": "hidden" }
+      ]
+    }
+  ]
+}
