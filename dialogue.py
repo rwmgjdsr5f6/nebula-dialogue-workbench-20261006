@@ -297,30 +297,36 @@ def cmd_unreachable(path):
     return 0
 
 
-def parse_inspect_args(rest):
-    """解析 inspect 可选的 --node 键值对（至多一次）。
+def parse_optional_node_args(rest, usage):
+    """解析可选的 --node 键值对（至多一次），inspect 与 references 共用。
 
-    rest 形如 [] 或 ['--node', 'n']；任何多余、重复或缺值参数
-    都按既有用法错误处理，并在读取文件前结束。
+    rest 形如 [] 或 ['--node', 'n']；任何多余、重复、缺值或
+    --node=编号 连写形式的参数都按用法错误处理，并在读取文件前结束。
+    格式错误时输出调用方给定的 usage 文字，各命令的用法提示互不混用。
     """
     if not rest:
         return None
     if len(rest) == 2 and rest[0] == "--node":
         return rest[1]
-    fail(INSPECT_USAGE)
+    fail(usage)
+
+
+def parse_inspect_args(rest):
+    """解析 inspect 可选的 --node 键值对（至多一次）。
+
+    格式规则与 references 相同，由 parse_optional_node_args 统一维护；
+    格式错误时使用 inspect 专用的用法文字。
+    """
+    return parse_optional_node_args(rest, INSPECT_USAGE)
 
 
 def parse_references_args(rest):
     """解析 references 可选的 --node 键值对（至多一次）。
 
-    rest 形如 [] 或 ['--node', 'n']；任何多余、重复、缺值或
-    --node=编号 连写形式的参数都按用法错误处理，并在读取文件前结束。
+    格式规则与 inspect 相同，由 parse_optional_node_args 统一维护；
+    格式错误时使用 references 专用的用法文字。
     """
-    if not rest:
-        return None
-    if len(rest) == 2 and rest[0] == "--node":
-        return rest[1]
-    fail(REFERENCES_USAGE)
+    return parse_optional_node_args(rest, REFERENCES_USAGE)
 
 
 def parse_preview_args(rest):
