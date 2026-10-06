@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""本地对话命令行程序：校验对话 JSON 结构，并进行一次分支预览、只读节点查看或入向引用查询。
+"""本地对话命令行程序：校验对话 JSON 结构，并进行一次分支预览、只读节点查看、入向引用查询或不可达节点报告。
 
 用法：
     python dialogue.py validate <文件路径>
     python dialogue.py preview <文件路径> --choice <选项编号> [--node <节点编号>]
     python dialogue.py inspect <文件路径> [--node <节点编号>]
     python dialogue.py references <文件路径> [--node <节点编号>]
+    python dialogue.py unreachable <文件路径>
 
 preview 省略 --node 时从 start 出发；--choice 与 --node 两对参数顺序可互换。
 inspect 省略 --node 时查看 start 指定的节点，只输出该节点信息，不选择选项。
 references 省略 --node 时查询 start 指定的节点，列出直接指向该节点的选项。
+unreachable 先完成与 validate 相同的整份校验，再报告无法从 start 沿选项
+target 到达的节点；起点本身始终可达，报告为只读，不改写输入文件。
 仅使用 Python 3 标准库，无需网络、外部账号或额外依赖。
 """
 
@@ -32,6 +35,9 @@ INSPECT_USAGE = USAGE + (
 REFERENCES_USAGE = INSPECT_USAGE + (
     "\n  python dialogue.py references <文件路径> [--node <节点编号>]"
 )
+
+# unreachable 只接受一个文件路径，参数错误专用的单行用法说明。
+UNREACHABLE_USAGE = "python dialogue.py unreachable <文件路径>"
 
 
 class DialogueError(Exception):
@@ -145,6 +151,26 @@ def find_node(nodes, node_id):
     return None  # 校验通过后不会发生
 
 
+def reachable_node_ids(start, nodes):
+    """从 start 沿选项 target 可达的节点编号集合。
+
+    起点本身始终计入可达（即使没有选项）；任意分支、任意步数都展开，
+    只沿 target 的正向引用访问，不反向。visited 同时充当终止条件，
+    因此自引用、重复指向和多节点循环都能正常结束且不重复。
+    """
+    by_id = {node["id"]: node for node in nodes}
+    seen = {start}
+    pending = [start]
+    while pending:
+        current = by_id[pending.pop()]
+        for option in current["options"]:
+            target = option["target"]
+            if target not in seen:
+                seen.add(target)
+                pending.append(target)
+    return seen
+
+
 def cmd_validate(path):
     data = load_dialogue(path)
     try:
@@ -256,6 +282,26 @@ def cmd_references(path, node_arg=None):
     return 0
 
 
+def cmd_unreachable(path):
+    # 报告前先完成与 validate 相同的整份结构与引用校验；不可达节点的
+    # 结构或引用非法时同样以校验失败告终，不输出报告。
+    data = load_dialogue(path)
+    try:
+        start, nodes = validate_dialogue(data)
+    except DialogueError as exc:
+        fail("校验失败：{}".format(exc))
+
+    # 只沿选项 target 的正向引用求可达集合；不可达节点指向可达节点
+    # 属于反向边，不会因此被计入。结果按原 nodes 顺序、去重排列。
+    reachable = reachable_node_ids(start, nodes)
+    unreachable = [node["id"] for node in nodes if node["id"] not in reachable]
+    result = {"start": start, "unreachable": unreachable}
+    sys.stdout.write(
+        json.dumps(result, ensure_ascii=False, separators=(",", ":")) + "\n"
+    )
+    return 0
+
+
 def parse_inspect_args(rest):
     """解析 inspect 可选的 --node 键值对（至多一次）。
 
@@ -328,6 +374,13 @@ def main(argv):
             fail(REFERENCES_USAGE)
         node_arg = parse_references_args(argv[3:])
         return cmd_references(argv[2], node_arg)
+    if command == "unreachable":
+        # 只接受一个文件路径：缺少路径、额外位置参数或任何选项参数
+        # 都在读取文件前以单行用法说明拒绝。形如选项的记号也不当作路径，
+        # 避免对其触发文件读取。
+        if len(argv) != 3 or argv[2].startswith("-"):
+            fail(UNREACHABLE_USAGE)
+        return cmd_unreachable(argv[2])
     fail(USAGE)
 
 

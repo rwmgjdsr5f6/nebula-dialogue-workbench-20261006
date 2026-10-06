@@ -16,6 +16,17 @@
 - `test_dialogue_references_args.py` 覆盖 `references` 的参数格式：
   缺路径、`--node` 缺值或重复、未知参数、额外位置参数、`--node=forest`
   连写形式均在读文件前以退出码 2 拒绝，标准错误仅为完整用法文字。
+- `test_dialogue_unreachable.py` 覆盖 `dialogue.py unreachable` 的不可达节点报告：
+  sample.json 全部可达、独立副本追加不可达 `side`（“旁路”，选项指向
+  `forest` 与自身）、起点无选项仍算可达、自引用与多个选项指向同一节点
+  正常结束、与起点断开的多节点循环整体列入、不可达节点反向指向可达
+  节点不改变结论、结果按原 `nodes` 顺序去重、编号首尾空白精确匹配；
+  另验证不可达节点自身缺字段或悬空 target 时先以“校验失败：”定位、
+  文件读取与 JSON 语法错误沿用既有分类。
+- `test_dialogue_unreachable_args.py` 覆盖 `unreachable` 的参数格式：
+  只接受一个文件路径；缺路径、额外位置参数、任何选项参数（含路径位置
+  形似选项的记号）均在读文件前以退出码 2 拒绝，标准错误仅为
+  `python dialogue.py unreachable <文件路径>` 加一个换行。
 
 ## 运行
 
