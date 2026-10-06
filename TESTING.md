@@ -9,6 +9,13 @@
   路径不存在、UTF-8 解码失败、空文件与多行 JSON 语法错误，以及
   sample.json 临时副本的读取成功对照；语法错误样例另验证文件语法错误
   优先于 `--choice abc` 的选项编号错误报告。
+- `test_dialogue_references.py` 覆盖 `dialogue.py references` 的入向引用查询：
+  省略/显式 `--node`、结尾节点单条引用、不可达来源的多个选项逐项保留、
+  自引用计入、循环关系不展开间接引用、start 字段本身不算引用，
+  以及节点不存在、整份校验先于查询、文件读取失败沿用既有错误分类。
+- `test_dialogue_references_args.py` 覆盖 `references` 的参数格式：
+  缺路径、`--node` 缺值或重复、未知参数、额外位置参数、`--node=forest`
+  连写形式均在读文件前以退出码 2 拒绝，标准错误仅为完整用法文字。
 
 ## 运行
 
