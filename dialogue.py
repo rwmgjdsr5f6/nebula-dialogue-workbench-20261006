@@ -5,9 +5,12 @@
     python dialogue.py validate <文件路径>
     python dialogue.py preview <文件路径> --choice <选项编号> [--node <节点编号>]
     python dialogue.py inspect <文件路径> [--node <节点编号>]
+    python dialogue.py references <文件路径> [--node <节点编号>]
 
 preview 省略 --node 时从 start 出发；--choice 与 --node 两对参数顺序可互换。
 inspect 省略 --node 时查看 start 指定的节点，只输出该节点信息，不选择选项。
+references 省略 --node 时查询 start 指定节点的入向引用，只输出直接指向该
+节点的选项，不展开间接引用。
 仅使用 Python 3 标准库，无需网络、外部账号或额外依赖。
 """
 
@@ -24,6 +27,12 @@ USAGE = (
 # inspect 参数错误专用的用法说明；validate/preview 的用法输出保持原样。
 INSPECT_USAGE = USAGE + (
     "\n  python dialogue.py inspect <文件路径> [--node <节点编号>]"
+)
+
+# references 参数错误专用的用法说明；validate/preview 的用法输出保持原样。
+REFERENCES_USAGE = USAGE + (
+    "\n  python dialogue.py inspect <文件路径> [--node <节点编号>]"
+    "\n  python dialogue.py references <文件路径> [--node <节点编号>]"
 )
 
 
@@ -219,6 +228,36 @@ def cmd_inspect(path, node_arg=None):
     return 0
 
 
+def cmd_references(path, node_arg=None):
+    # 查询前先完成整份文件校验（不可达来源的结构或引用错误也在此暴露）。
+    data = load_dialogue(path)
+    try:
+        start, nodes = validate_dialogue(data)
+    except DialogueError as exc:
+        fail("校验失败：{}".format(exc))
+
+    # 省略 --node 时查询 start 指定的节点；节点编号按原字符串精确匹配。
+    target_id = start if node_arg is None else node_arg
+    if find_node(nodes, target_id) is None:
+        fail("文件中不存在编号为 {!r} 的节点".format(target_id))
+
+    # 入向引用覆盖整份文件（含从 start 不可达的来源）；按 nodes 顺序及
+    # 各自 options 顺序逐项收集，重复选项与自引用均保留，不展开间接引用。
+    references = []
+    for node in nodes:
+        for i, option in enumerate(node["options"]):
+            if option["target"] == target_id:
+                references.append({
+                    "source": node["id"],
+                    "choice": i + 1,
+                    "text": option["text"],
+                })
+
+    result = {"id": target_id, "references": references}
+    sys.stdout.write(json.dumps(result, ensure_ascii=False) + "\n")
+    return 0
+
+
 def parse_inspect_args(rest):
     """解析 inspect 可选的 --node 键值对（至多一次）。
 
@@ -230,6 +269,20 @@ def parse_inspect_args(rest):
     if len(rest) == 2 and rest[0] == "--node":
         return rest[1]
     fail(INSPECT_USAGE)
+
+
+def parse_references_args(rest):
+    """解析 references 可选的 --node 键值对（至多一次）。
+
+    规则与 inspect 相同：rest 形如 [] 或 ['--node', 'n']；任何多余、
+    重复或缺值参数（含 --node=n 连写、额外位置参数）都按用法错误
+    处理，并在读取文件前结束。
+    """
+    if not rest:
+        return None
+    if len(rest) == 2 and rest[0] == "--node":
+        return rest[1]
+    fail(REFERENCES_USAGE)
 
 
 def parse_preview_args(rest):
@@ -273,6 +326,11 @@ def main(argv):
             fail(INSPECT_USAGE)
         node_arg = parse_inspect_args(argv[3:])
         return cmd_inspect(argv[2], node_arg)
+    if command == "references":
+        if len(argv) < 3:
+            fail(REFERENCES_USAGE)
+        node_arg = parse_references_args(argv[3:])
+        return cmd_references(argv[2], node_arg)
     fail(USAGE)
 
 
