@@ -2,6 +2,11 @@
 
 - `test_dialogue_preview.py` 覆盖 `dialogue.py preview` 的现有单步预览行为：
   成功输出、编号越界、非整数编号、空选项、未选中选项的悬空引用、起点自引用循环。
+- `test_dialogue_preview_node.py` 覆盖 `preview --node` 指定出发节点的行为：
+  从临时副本末尾追加的不可达 side 节点出发（河边/森林文字）、`--node` 与
+  `--choice` 参数顺序互换、显式 `--node start` 与省略 `--node` 等价、
+  side 自引用只预览一步；失败边界含节点不存在、结尾节点无有效选项、
+  编号 0/3 越界、非整数编号，以及整份文件校验失败优先于指定节点预览。
 - `test_dialogue_validate.py` 覆盖 `dialogue.py validate` 对整份对话的结构与引用校验
   （含从起点不可达的节点）：合法样例通过、重复编号、start 悬空引用、
   不可达节点缺字段、不可达节点选项悬空引用。
@@ -21,6 +26,34 @@ python -m unittest discover -v
 - 成功用例：退出码 0，标准错误为空，标准输出仅为结果文字加一个结尾换行。
 - 失败用例：退出码 2，标准输出为空，标准错误含关键说明且无调用栈。
 - 所有用例：执行前后输入文件字节不变；临时样例自动清理，可重复运行。
+
+## preview --node 样例与预期
+
+`python dialogue.py preview <文件路径> --node <节点编号> --choice <编号>`
+先整份校验，再从指定节点（允许从起点不可达）出发预览一步；
+`--node` 与 `--choice` 两对参数顺序可互换，显式 `--node start` 与省略 `--node` 等价。
+
+派生样例以 `sample.json` 为底，在临时副本末尾追加任何节点都不指向的
+`side` 节点（文字「旁路入口」，两个选项依次指向 `forest`、`river`）。
+
+成功样例（退出码 0，标准错误为空，标准输出仅为结果文字加一个结尾换行）：
+
+| 样例 | 预期标准输出 |
+| --- | --- |
+| `--node side --choice 2`（交换参数顺序结果相同） | `你到了河边。\n` |
+| `--node side --choice 1`（交换参数顺序结果相同） | `你到了森林。\n` |
+| 显式 `--node start` 与省略 `--node`（choice 1/2） | 两者退出码与两路输出完全一致 |
+| side 仅保留一个指向自身的选项，`--node side --choice 1` | `旁路入口\n`（循环引用只预览一步） |
+
+失败样例（退出码 2，标准输出为空，标准错误无调用栈）：
+
+| 改动与调用 | 标准错误须包含的说明 |
+| --- | --- |
+| 指定不存在的 `missing` 并选择 1 | `missing`、节点不存在的说明 |
+| 指定 `forest`（无选项）并选择 1 | `forest`、该出发节点没有有效选项 |
+| side 两选项时选择 0 或 3 | `side`、所选编号、有效范围 `1 到 2` |
+| side 两选项时选择 `abc` | 原值 `'abc'`、`side`、无法解析为整数 |
+| 起点第二选项 target 改为 `missing`，仍 `--node side --choice 1` | `校验失败`、`nodes[0].options[1].target`、`missing`，且不输出森林文字 |
 
 ## validate 样例与预期
 
