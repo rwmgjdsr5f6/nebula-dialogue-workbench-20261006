@@ -6,10 +6,12 @@
     python dialogue.py preview <文件路径> --choice <选项编号> [--node <节点编号>]
     python dialogue.py inspect <文件路径> [--node <节点编号>]
     python dialogue.py references <文件路径> [--node <节点编号>]
+    python dialogue.py unreachable <文件路径>
 
 preview 省略 --node 时从 start 出发；--choice 与 --node 两对参数顺序可互换。
 inspect 省略 --node 时查看 start 指定的节点，只输出该节点信息，不选择选项。
 references 省略 --node 时查询 start 指定的节点，列出直接指向该节点的选项。
+unreachable 只接受文件路径，报告无法从 start 沿选项 target 到达的节点编号。
 仅使用 Python 3 标准库，无需网络、外部账号或额外依赖。
 """
 
@@ -32,6 +34,9 @@ INSPECT_USAGE = USAGE + (
 REFERENCES_USAGE = INSPECT_USAGE + (
     "\n  python dialogue.py references <文件路径> [--node <节点编号>]"
 )
+
+# unreachable 参数错误专用的用法说明（单行，不带“用法：”前缀）。
+UNREACHABLE_USAGE = "python dialogue.py unreachable <文件路径>"
 
 
 class DialogueError(Exception):
@@ -256,6 +261,35 @@ def cmd_references(path, node_arg=None):
     return 0
 
 
+def cmd_unreachable(path):
+    # 报告前先完成与 validate 相同的整份校验（问题即使位于不可达节点也拒绝报告）。
+    data = load_dialogue(path)
+    try:
+        start, nodes = validate_dialogue(data)
+    except DialogueError as exc:
+        fail("校验失败：{}".format(exc))
+
+    # 从 start 出发沿各选项的 target 做广度优先遍历；起点本身始终可达，
+    # 自引用与循环靠 visited 集合终止，引用方向不倒置。
+    visited = {start}
+    queue = [start]
+    while queue:
+        current = queue.pop(0)
+        node = find_node(nodes, current)
+        for option in node["options"]:
+            target = option["target"]
+            if target not in visited:
+                visited.add(target)
+                queue.append(target)
+
+    # 不可达编号按原 nodes 顺序排列，每个编号只出现一次；只读报告，不改写文件。
+    unreachable = [node["id"] for node in nodes if node["id"] not in visited]
+    result = {"start": start, "unreachable": unreachable}
+    sys.stdout.write(json.dumps(result, ensure_ascii=False,
+                                separators=(",", ":")) + "\n")
+    return 0
+
+
 def parse_inspect_args(rest):
     """解析 inspect 可选的 --node 键值对（至多一次）。
 
@@ -328,6 +362,11 @@ def main(argv):
             fail(REFERENCES_USAGE)
         node_arg = parse_references_args(argv[3:])
         return cmd_references(argv[2], node_arg)
+    if command == "unreachable":
+        # 只接受一个文件路径：缺路径、多余位置参数或任何选项参数都在读取文件前拒绝。
+        if len(argv) != 3:
+            fail(UNREACHABLE_USAGE)
+        return cmd_unreachable(argv[2])
     fail(USAGE)
 
 
