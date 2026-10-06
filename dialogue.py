@@ -144,6 +144,21 @@ def validate_dialogue(data):
     return start, nodes
 
 
+def load_validated_dialogue(path):
+    """读取文件、解析 JSON 并完成整份校验，是各命令共用的前置流程。
+
+    依次复用 load_dialogue（文件读取、UTF-8 解码、JSON 语法错误的报告）
+    与 validate_dialogue（含不可达节点在内的结构与引用校验）；校验失败
+    在此统一转换为「校验失败：…」说明并以退出码 2 结束。成功时返回
+    (start, nodes)，与 validate_dialogue 的返回值一致。
+    """
+    data = load_dialogue(path)
+    try:
+        return validate_dialogue(data)
+    except DialogueError as exc:
+        fail("校验失败：{}".format(exc))
+
+
 def find_node(nodes, node_id):
     for node in nodes:
         if node["id"] == node_id:
@@ -172,22 +187,14 @@ def reachable_node_ids(start, nodes):
 
 
 def cmd_validate(path):
-    data = load_dialogue(path)
-    try:
-        validate_dialogue(data)
-    except DialogueError as exc:
-        fail("校验失败：{}".format(exc))
+    load_validated_dialogue(path)
     sys.stdout.write("校验通过\n")
     return 0
 
 
 def cmd_preview(path, choice_arg, node_arg=None):
     # 预览前先完成整份文件校验（未选中分支的结构或引用错误也在此暴露）。
-    data = load_dialogue(path)
-    try:
-        start, nodes = validate_dialogue(data)
-    except DialogueError as exc:
-        fail("校验失败：{}".format(exc))
+    start, nodes = load_validated_dialogue(path)
 
     # 省略 --node 时仍从 start 出发；节点编号按原字符串精确匹配。
     origin_id = start if node_arg is None else node_arg
@@ -227,11 +234,7 @@ def cmd_preview(path, choice_arg, node_arg=None):
 
 def cmd_inspect(path, node_arg=None):
     # 查看前先完成整份文件校验（不可达节点的结构或引用错误也在此暴露）。
-    data = load_dialogue(path)
-    try:
-        start, nodes = validate_dialogue(data)
-    except DialogueError as exc:
-        fail("校验失败：{}".format(exc))
+    start, nodes = load_validated_dialogue(path)
 
     # 省略 --node 时查看 start 指定的节点；节点编号按原字符串精确匹配。
     origin_id = start if node_arg is None else node_arg
@@ -254,11 +257,7 @@ def cmd_inspect(path, node_arg=None):
 
 def cmd_references(path, node_arg=None):
     # 查询前先完成整份文件校验（不可达节点的结构或引用错误也在此暴露）。
-    data = load_dialogue(path)
-    try:
-        start, nodes = validate_dialogue(data)
-    except DialogueError as exc:
-        fail("校验失败：{}".format(exc))
+    start, nodes = load_validated_dialogue(path)
 
     # 省略 --node 时查询 start 指定的节点；节点编号按原字符串精确匹配。
     target_id = start if node_arg is None else node_arg
@@ -285,11 +284,7 @@ def cmd_references(path, node_arg=None):
 def cmd_unreachable(path):
     # 报告前先完成与 validate 相同的整份结构与引用校验；不可达节点的
     # 结构或引用非法时同样以校验失败告终，不输出报告。
-    data = load_dialogue(path)
-    try:
-        start, nodes = validate_dialogue(data)
-    except DialogueError as exc:
-        fail("校验失败：{}".format(exc))
+    start, nodes = load_validated_dialogue(path)
 
     # 只沿选项 target 的正向引用求可达集合；不可达节点指向可达节点
     # 属于反向边，不会因此被计入。结果按原 nodes 顺序、去重排列。
