@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""本地对话命令行程序：校验对话 JSON 结构，并进行一次分支预览、只读节点查看、入向引用查询或不可达节点报告。
+"""本地对话命令行程序：校验对话 JSON 结构，并进行一次分支预览、只读节点查看、入向引用查询、不可达节点报告或无结尾路径报告。
 
 用法：
     python dialogue.py validate <文件路径>
@@ -7,12 +7,16 @@
     python dialogue.py inspect <文件路径> [--node <节点编号>]
     python dialogue.py references <文件路径> [--node <节点编号>]
     python dialogue.py unreachable <文件路径>
+    python dialogue.py no-ending <文件路径>
 
 preview 省略 --node 时从 start 出发；--choice 与 --node 两对参数顺序可互换。
 inspect 省略 --node 时查看 start 指定的节点，只输出该节点信息，不选择选项。
 references 省略 --node 时查询 start 指定的节点，列出直接指向该节点的选项。
 unreachable 先完成与 validate 相同的整份校验，再报告无法从 start 沿选项
 target 到达的节点；起点本身始终可达，报告为只读，不改写输入文件。
+no-ending 先完成与 validate 相同的整份校验，再报告从 start 沿选项 target
+可达、却不存在任何有限步路径走到 options 为空的结尾节点的节点；
+结尾本身按零步到达结尾处理，不可达节点不列入报告。
 仅使用 Python 3 标准库，无需网络、外部账号或额外依赖。
 """
 
@@ -38,6 +42,9 @@ REFERENCES_USAGE = INSPECT_USAGE + (
 
 # unreachable 只接受一个文件路径，参数错误专用的单行用法说明。
 UNREACHABLE_USAGE = "python dialogue.py unreachable <文件路径>"
+
+# no-ending 只接受一个文件路径，参数错误专用的单行用法说明。
+NO_ENDING_USAGE = "python dialogue.py no-ending <文件路径>"
 
 
 class DialogueError(Exception):
@@ -186,6 +193,32 @@ def reachable_node_ids(start, nodes):
     return seen
 
 
+def can_reach_ending_ids(nodes):
+    """能够沿选项 target 以有限步走到某个结尾节点的节点编号集合。
+
+    options 为空数组的节点本身是结尾，按零步到达计入；其余节点只要
+    存在一个选项的目标已在集合中，就一并计入。从全部结尾出发沿反向
+    引用逐层扩展直到不再新增，因此只要存在一条到结尾的路径就计入，
+    即使其他选项会进入循环；整份文件没有结尾时返回空集合。
+    """
+    by_id = {node["id"]: node for node in nodes}
+    reverse = {node["id"]: [] for node in nodes}
+    good = set()
+    for node in nodes:
+        if not node["options"]:
+            good.add(node["id"])
+        for option in node["options"]:
+            reverse[option["target"]].append(node["id"])
+    pending = list(good)
+    while pending:
+        target = pending.pop()
+        for source in reverse[target]:
+            if source not in good:
+                good.add(source)
+                pending.append(source)
+    return good
+
+
 def cmd_validate(path):
     load_validated_dialogue(path)
     sys.stdout.write("校验通过\n")
@@ -297,6 +330,27 @@ def cmd_unreachable(path):
     return 0
 
 
+def cmd_no_ending(path):
+    # 报告前先完成与 validate 相同的整份结构与引用校验；不可达节点的
+    # 结构或引用非法时同样以校验失败告终，不输出报告。
+    start, nodes = load_validated_dialogue(path)
+
+    # 只报告从 start 正向可达的节点；再用「能否在有限步内走到结尾」筛除。
+    # 结尾节点本身按零步计入能到达结尾，故不会出现在报告中；整份文件
+    # 没有结尾时全部可达节点都列入。结果按原 nodes 顺序、去重排列。
+    reachable = reachable_node_ids(start, nodes)
+    can_end = can_reach_ending_ids(nodes)
+    no_ending = [
+        node["id"] for node in nodes
+        if node["id"] in reachable and node["id"] not in can_end
+    ]
+    result = {"start": start, "no_ending": no_ending}
+    sys.stdout.write(
+        json.dumps(result, ensure_ascii=False, separators=(",", ":")) + "\n"
+    )
+    return 0
+
+
 def parse_optional_node_args(rest, usage):
     """解析可选的 --node 键值对（至多一次），inspect 与 references 共用。
 
@@ -376,6 +430,12 @@ def main(argv):
         if len(argv) != 3 or argv[2].startswith("-"):
             fail(UNREACHABLE_USAGE)
         return cmd_unreachable(argv[2])
+    if command == "no-ending":
+        # 与 unreachable 相同的参数规则：只接受一个文件路径，路径位置
+        # 以减号开头的记号一律在读取文件前以单行用法说明拒绝。
+        if len(argv) != 3 or argv[2].startswith("-"):
+            fail(NO_ENDING_USAGE)
+        return cmd_no_ending(argv[2])
     fail(USAGE)
 
 
