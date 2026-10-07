@@ -10,6 +10,7 @@
     python dialogue.py no-ending <文件路径>
     python dialogue.py route <文件路径> --node <目标编号>
     python dialogue.py rename-node <文件路径> --node <旧编号> --to <新编号>
+    python dialogue.py retarget-option <文件路径> --node <来源编号> --choice <选项编号> --to <目标编号>
 
 preview 省略 --node 时从 start 出发；--choice 与 --node 两对参数顺序可互换。
 inspect 省略 --node 时查看 start 指定的节点，只输出该节点信息，不选择选项。
@@ -27,6 +28,12 @@ rename-node 先完成与 validate 相同的整份校验，再把指定节点的 
 options[].target 一并更新（含不可达来源、重复引用、自引用与循环中的
 引用），随后把修改后的完整对话对象以单行 JSON 输出到标准输出；
 输入文件字节保持不变，不创建结果文件。
+retarget-option 先完成与 validate 相同的整份校验，再把来源节点指定
+选项的 target 改为目标编号：选项编号从 1 开始、按来源节点 options
+顺序确定，整数解析规则与 preview 相同；来源与目标编号按原字符串
+精确匹配，不可达来源或目标、自引用与合法循环均可使用。除选中项的
+target 外其余内容全部保持原样，随后把修改后的完整对话对象以单行
+JSON 输出到标准输出；输入文件字节保持不变，不创建结果文件。
 仅使用 Python 3 标准库，无需网络、外部账号或额外依赖。
 """
 
@@ -64,6 +71,13 @@ ROUTE_USAGE = "python dialogue.py route <文件路径> --node <目标编号>"
 # 参数错误专用的单行用法说明。
 RENAME_USAGE = (
     "python dialogue.py rename-node <文件路径> --node <旧编号> --to <新编号>"
+)
+
+# retarget-option 只接受「路径 + --node 来源编号 + --choice 选项编号
+# + --to 目标编号」的固定顺序，参数错误专用的单行用法说明。
+RETARGET_USAGE = (
+    "python dialogue.py retarget-option <文件路径> --node <来源编号> "
+    "--choice <选项编号> --to <目标编号>"
 )
 
 
@@ -467,6 +481,53 @@ def cmd_rename_node(path, old_id, new_id):
     return 0
 
 
+def cmd_retarget_option(path, source_id, choice_arg, target_id):
+    # 重定向前先完成与 validate 相同的整份结构与引用校验；不可达节点、
+    # 未选中分支中的错误同样先于此处报告，待改选项的悬空 target 也先报
+    # 校验失败。保留 load_dialogue 返回的原始对象并在其上修改，使顶层
+    # 额外字段、键顺序与全部未涉及的 JSON 值原样保留。
+    data = load_dialogue(path)
+    try:
+        start, nodes = validate_dialogue(data)
+    except DialogueError as exc:
+        fail("校验失败：{}".format(exc))
+
+    # 来源编号按原字符串精确匹配，不裁剪首尾空白。
+    source_node = find_node(nodes, source_id)
+    if source_node is None:
+        fail("文件中不存在编号为 {!r} 的节点".format(source_id))
+    options = source_node["options"]
+
+    # 选项编号的整数解析规则与显式 --node 的 preview 相同。
+    try:
+        choice = int(choice_arg)
+    except ValueError:
+        fail("--choice 的值 {!r} 无法解析为整数（出发节点编号为 {!r}）".format(
+            choice_arg, source_id))
+
+    # 先报结尾无选项，再报编号越界；文案沿用显式 --node 的 preview。
+    if not options:
+        fail("--choice {} 无效：出发节点 {!r} 是结尾节点，没有有效选项".format(
+            choice, source_id))
+    if not 1 <= choice <= len(options):
+        fail("--choice {} 不在出发节点 {!r} 的有效选项编号范围 1 到 {} 内".format(
+            choice, source_id, len(options)))
+
+    # 目标编号按原字符串精确匹配；不可达目标、自引用与合法循环均可使用，
+    # 目标与原 target 相同也算成功。
+    if find_node(nodes, target_id) is None:
+        fail("文件中不存在编号为 {!r} 的节点".format(target_id))
+
+    # 只改选中项的 target：start、节点编号、全部文字、其他引用及所有
+    # 额外字段的 JSON 值保持原样，节点与选项数组顺序也不变。
+    options[choice - 1]["target"] = target_id
+
+    # 只向标准输出写修改后的完整对话对象（单行 JSON 加换行，中文不转义）；
+    # 输入文件字节不变，也不创建任何结果文件。
+    sys.stdout.write(json.dumps(data, ensure_ascii=False) + "\n")
+    return 0
+
+
 def parse_optional_node_args(rest, usage):
     """解析可选的 --node 键值对（至多一次），inspect 与 references 共用。
 
@@ -570,6 +631,17 @@ def main(argv):
                 or argv[3] != "--node" or argv[5] != "--to"):
             fail(RENAME_USAGE)
         return cmd_rename_node(argv[2], argv[4], argv[6])
+    if command == "retarget-option":
+        # 只接受「一个文件路径 + 一次分写的 --node 来源编号 + 一次分写的
+        # --choice 选项编号 + 一次分写的 --to 目标编号」的固定顺序：缺少
+        # 路径或任何值、--node/--choice/--to 重复、未知或额外参数、
+        # --node/--choice/--to 的 =值 连写形式、三对参数顺序颠倒，以及路径
+        # 位置形似选项的记号，都在读取文件前以单行用法说明拒绝。
+        if (len(argv) != 9 or argv[2].startswith("-")
+                or argv[3] != "--node" or argv[5] != "--choice"
+                or argv[7] != "--to"):
+            fail(RETARGET_USAGE)
+        return cmd_retarget_option(argv[2], argv[4], argv[6], argv[8])
     fail(USAGE)
 
 
