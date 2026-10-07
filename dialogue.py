@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""本地对话命令行程序：校验对话 JSON 结构，并进行一次分支预览、只读节点查看、入向引用查询、不可达节点报告或无结尾路径报告。
+"""本地对话命令行程序：校验对话 JSON 结构，并进行一次分支预览、只读节点查看、入向引用查询、不可达节点报告、无结尾路径报告或路线查询。
 
 用法：
     python dialogue.py validate <文件路径>
@@ -8,6 +8,7 @@
     python dialogue.py references <文件路径> [--node <节点编号>]
     python dialogue.py unreachable <文件路径>
     python dialogue.py no-ending <文件路径>
+    python dialogue.py route <文件路径> --node <目标编号>
 
 preview 省略 --node 时从 start 出发；--choice 与 --node 两对参数顺序可互换。
 inspect 省略 --node 时查看 start 指定的节点，只输出该节点信息，不选择选项。
@@ -17,9 +18,13 @@ target 到达的节点；起点本身始终可达，报告为只读，不改写�
 no-ending 先完成与 validate 相同的整份校验，再报告从 start 沿选项 target
 可达、却不存在任何有限步路径走到结尾（options 为空数组的节点）的节点；
 结尾本身按零步到达结尾处理，不可达节点不列入报告，报告为只读。
+route 先完成与 validate 相同的整份校验，再给出从 start 到指定节点的
+路线：依次经过的选项编号序列，经过选项数量最少者优先，并列时取完整
+选项编号序列数值字典序最小者；目标不可达时路线为 null，查询为只读。
 仅使用 Python 3 标准库，无需网络、外部账号或额外依赖。
 """
 
+import heapq
 import json
 import sys
 
@@ -45,6 +50,9 @@ UNREACHABLE_USAGE = "python dialogue.py unreachable <文件路径>"
 
 # no-ending 同样只接受一个文件路径，参数错误专用的单行用法说明。
 NO_ENDING_USAGE = "python dialogue.py no-ending <文件路径>"
+
+# route 只接受一个文件路径加一次分写的 --node，参数错误专用的单行用法说明。
+ROUTE_USAGE = "python dialogue.py route <文件路径> --node <目标编号>"
 
 
 class DialogueError(Exception):
@@ -354,6 +362,62 @@ def cmd_no_ending(path):
     return 0
 
 
+def best_route(start, target, nodes):
+    """从 start 到 target 的最优路线；不可达时返回 None。
+
+    路线是若干 {"source", "choice", "target"} 步骤组成的列表，按行走
+    顺序排列，choice 为从 1 开始的选项编号。优先级：经过选项数量最少
+    者；并列时完整选项编号序列按数值字典序最小者（与 nodes 顺序无关）。
+    用堆按 (步数, 选项编号序列) 逐条弹出候选路线：每步追加一个选项后
+    该比较键保持单调（步数更小者追加后仍不更大，等长时字典序在共同
+    前缀下保持），因此节点首次弹出即为其最优路线。visited 充当终止
+    条件，自引用、多节点循环与重复指向都能有限结束。
+    """
+    if start == target:
+        return []
+    by_id = {node["id"]: node for node in nodes}
+    visited = set()
+    counter = 0
+    # 堆元素：(步数, 选项编号序列, 入堆序号, 节点编号, 路线)；入堆序号
+    # 只作并列时的稳定次序，保证不会比较到节点编号或路线本身。
+    heap = [(0, (), counter, start, [])]
+    while heap:
+        length, sequence, _, current, path = heapq.heappop(heap)
+        if current in visited:
+            continue
+        visited.add(current)
+        if current == target:
+            return path
+        for i, option in enumerate(by_id[current]["options"]):
+            next_id = option["target"]
+            if next_id in visited:
+                continue
+            counter += 1
+            step = {"source": current, "choice": i + 1, "target": next_id}
+            heapq.heappush(heap, (
+                length + 1, sequence + (i + 1,), counter, next_id,
+                path + [step],
+            ))
+    return None
+
+
+def cmd_route(path, node_arg):
+    # 查询前先完成整份校验（不可达节点的结构或引用错误也在此暴露）。
+    start, nodes = load_validated_dialogue(path)
+
+    # 目标编号按原字符串精确匹配，不裁剪首尾空白。
+    if find_node(nodes, node_arg) is None:
+        fail("文件中不存在编号为 {!r} 的节点".format(node_arg))
+
+    # 只读查询：不沿路线前进、不保存进度，也不改写输入文件。
+    result = {"start": start, "target": node_arg,
+              "path": best_route(start, node_arg, nodes)}
+    sys.stdout.write(
+        json.dumps(result, ensure_ascii=False, separators=(",", ":")) + "\n"
+    )
+    return 0
+
+
 def parse_optional_node_args(rest, usage):
     """解析可选的 --node 键值对（至多一次），inspect 与 references 共用。
 
@@ -439,6 +503,14 @@ def main(argv):
         if len(argv) != 3 or argv[2].startswith("-"):
             fail(NO_ENDING_USAGE)
         return cmd_no_ending(argv[2])
+    if command == "route":
+        # 只接受「一个文件路径 + 一次分写的 --node 目标」：缺少路径或目标
+        # 值、--node 重复、未知或额外参数、--node=编号 连写形式，以及路径
+        # 位置形似选项的记号，都在读取文件前以单行用法说明拒绝。
+        if (len(argv) != 5 or argv[2].startswith("-")
+                or argv[3] != "--node"):
+            fail(ROUTE_USAGE)
+        return cmd_route(argv[2], argv[4])
     fail(USAGE)
 
 
