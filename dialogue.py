@@ -261,6 +261,30 @@ def cmd_validate(path):
     return 0
 
 
+def locate_option(options, choice_arg, origin_id, origin_label):
+    """按编号定位选项，preview 与 retarget-option 共用的判定流程。
+
+    在出发节点已确定后调用，依次执行：把编号文本解析为整数（沿用 int()
+    语义，01、+1 与带首尾空白的 1 均等同于编号 1）、判断结尾无选项、
+    检查编号是否在 1 到选项总数范围内（选项按 options 数组顺序从 1
+    编号）。任一步失败都以对应说明结束（退出码 2）；origin_label 为
+    「起点」或「出发节点」，只决定失败说明中的措辞。成功时返回选中的
+    选项对象本身，调用方可读取或改写其 target。
+    """
+    try:
+        choice = int(choice_arg)
+    except ValueError:
+        fail("--choice 的值 {!r} 无法解析为整数（{}编号为 {!r}）".format(
+            choice_arg, origin_label, origin_id))
+    if not options:
+        fail("--choice {} 无效：{} {!r} 是结尾节点，没有有效选项".format(
+            choice, origin_label, origin_id))
+    if not 1 <= choice <= len(options):
+        fail("--choice {} 不在{} {!r} 的有效选项编号范围 1 到 {} 内".format(
+            choice, origin_label, origin_id, len(options)))
+    return options[choice - 1]
+
+
 def cmd_preview(path, choice_arg, node_arg=None):
     # 预览前先完成整份文件校验（未选中分支的结构或引用错误也在此暴露）。
     start, nodes = load_validated_dialogue(path)
@@ -270,33 +294,15 @@ def cmd_preview(path, choice_arg, node_arg=None):
     origin_node = find_node(nodes, origin_id)
     if origin_node is None:
         fail("文件中不存在编号为 {!r} 的节点".format(origin_id))
-    options = origin_node["options"]
 
-    try:
-        choice = int(choice_arg)
-    except ValueError:
-        if node_arg is None:
-            fail("--choice 的值 {!r} 无法解析为整数（起点编号为 {!r}）".format(
-                choice_arg, origin_id))
-        fail("--choice 的值 {!r} 无法解析为整数（出发节点编号为 {!r}）".format(
-            choice_arg, origin_id))
+    # 编号定位选项的流程与 retarget-option 共用一处；省略 --node 时
+    # 失败说明使用「起点」措辞，显式指定时使用「出发节点」措辞。
+    origin_label = "起点" if node_arg is None else "出发节点"
+    option = locate_option(
+        origin_node["options"], choice_arg, origin_id, origin_label)
 
-    if not options:
-        if node_arg is None:
-            fail("--choice {} 无效：起点 {!r} 是结尾节点，没有有效选项".format(
-                choice, origin_id))
-        fail("--choice {} 无效：出发节点 {!r} 是结尾节点，没有有效选项".format(
-            choice, origin_id))
-    if not 1 <= choice <= len(options):
-        if node_arg is None:
-            fail("--choice {} 不在起点 {!r} 的有效选项编号范围 1 到 {} 内".format(
-                choice, origin_id, len(options)))
-        fail("--choice {} 不在出发节点 {!r} 的有效选项编号范围 1 到 {} 内".format(
-            choice, origin_id, len(options)))
-
-    # 选项编号从 1 开始，依据数组顺序确定；只输出目标节点文字，不前进、不改写文件。
-    target_id = options[choice - 1]["target"]
-    target_node = find_node(nodes, target_id)
+    # 只输出目标节点文字，不前进、不改写文件。
+    target_node = find_node(nodes, option["target"])
     sys.stdout.write(target_node["text"] + "\n")
     return 0
 
@@ -496,22 +502,11 @@ def cmd_retarget_option(path, source_id, choice_arg, target_id):
     source_node = find_node(nodes, source_id)
     if source_node is None:
         fail("文件中不存在编号为 {!r} 的节点".format(source_id))
-    options = source_node["options"]
 
-    # 选项编号的整数解析规则与显式 --node 的 preview 完全相同。
-    try:
-        choice = int(choice_arg)
-    except ValueError:
-        fail("--choice 的值 {!r} 无法解析为整数（出发节点编号为 {!r}）".format(
-            choice_arg, source_id))
-
-    # 结尾无选项、编号越界同样沿用显式 --node 的 preview 对应说明。
-    if not options:
-        fail("--choice {} 无效：出发节点 {!r} 是结尾节点，没有有效选项".format(
-            choice, source_id))
-    if not 1 <= choice <= len(options):
-        fail("--choice {} 不在出发节点 {!r} 的有效选项编号范围 1 到 {} 内".format(
-            choice, source_id, len(options)))
+    # 编号定位选项的流程与 preview 共用一处，措辞固定为「出发节点」；
+    # 新目标的存在性检查在选项定位成功之后才进行。
+    option = locate_option(
+        source_node["options"], choice_arg, source_id, "出发节点")
 
     # 目标编号按原字符串精确匹配，不裁剪首尾空白；不可达目标、自引用与
     # 合法循环都允许，因此此处只检查编号存在，不再做可达性分析。
@@ -521,7 +516,7 @@ def cmd_retarget_option(path, source_id, choice_arg, target_id):
     # 只改选中项的 target：start、节点编号、全部文字、其他选项的引用、
     # 额外字段的 JSON 值及节点与选项数组顺序全部保持原样；目标与原
     # target 相同时这一赋值为幂等操作，输出与原对象等价。
-    options[choice - 1]["target"] = target_id
+    option["target"] = target_id
 
     # 只向标准输出写修改后的完整对话对象（单行 JSON 加换行，中文不转义）；
     # 输入文件字节不变，也不创建任何结果文件。
