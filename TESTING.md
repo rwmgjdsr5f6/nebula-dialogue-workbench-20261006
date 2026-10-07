@@ -69,6 +69,24 @@
   颠倒、路径位置形似选项的记号均在读文件前以退出码 2 拒绝，标准错误
   仅为 `python dialogue.py rename-node <文件路径> --node <旧编号> --to
   <新编号>` 加一个换行；形似选项的旧/新编号照收为编号。
+- `test_dialogue_retarget_option.py` 覆盖 `dialogue.py retarget-option`
+  的选项目标重定向：sample.json 中 `--node start --choice 1 --to river`
+  的验收结果（起点两个选项 target 均为 river、其余一致）、只改选中项
+  而 start/编号/文字/其他引用/额外字段/数组顺序原样、不可达来源与
+  不可达目标可用、自引用与合法循环、目标与原 target 相同输出等价 JSON、
+  中文不转义、编号首尾空白精确匹配、不创建结果文件；另验证来源与目标
+  节点不存在沿用节点不存在说明、非整数编号、结尾无选项、编号越界沿用
+  显式 `--node` 的 preview 对应错误及来源→整数→结尾→范围→目标的检查
+  顺序、待改 target 悬空或未选分支及不可达节点非法时先以“校验失败：”
+  定位、文件读取与 JSON 语法错误沿用既有分类。
+- `test_dialogue_retarget_option_args.py` 覆盖 `retarget-option` 的参数
+  格式：只接受「一个文件路径 + 一次分写的 `--node <来源编号>` + 一次
+  分写的 `--choice <选项编号>` + 一次分写的 `--to <目标编号>`」的固定
+  顺序；缺路径或任一值、`--node`/`--choice`/`--to` 重复、未知或额外
+  参数、三种连写形式、三对参数顺序颠倒、路径位置形似选项的记号均在
+  读文件前以退出码 2 拒绝，标准错误仅为 `python dialogue.py
+  retarget-option <文件路径> --node <来源编号> --choice <选项编号>
+  --to <目标编号>` 加一个换行；形似选项的编号值照收。
 
 ## 运行
 
