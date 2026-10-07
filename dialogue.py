@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""本地对话命令行程序：校验对话 JSON 结构，并进行一次分支预览、只读节点查看、入向引用查询、不可达节点报告、无结尾路径报告、路线查询或节点重命名。
+"""本地对话命令行程序：校验对话 JSON 结构，并进行一次分支预览、只读节点查看、入向引用查询、不可达节点报告、无结尾路径报告、路线查询、节点重命名、选项目标重定向或节点正文修改。
 
 用法：
     python dialogue.py validate <文件路径>
@@ -11,6 +11,7 @@
     python dialogue.py route <文件路径> --node <目标编号>
     python dialogue.py rename-node <文件路径> --node <旧编号> --to <新编号>
     python dialogue.py retarget-option <文件路径> --node <来源编号> --choice <选项编号> --to <目标编号>
+    python dialogue.py set-node-text <文件路径> --node <节点编号> --text <新正文>
 
 preview 省略 --node 时从 start 出发；--choice 与 --node 两对参数顺序可互换。
 inspect 省略 --node 时查看 start 指定的节点，只输出该节点信息，不选择选项。
@@ -32,6 +33,13 @@ retarget-option 先完成与 validate 相同的整份校验，再只把来源节
 options 中指定选项（编号从 1 开始、按数组顺序确定）的 target 改为
 新目标编号：来源与目标均按原字符串精确匹配，不可达来源或目标、
 自引用与合法循环都允许，目标与原 target 相同时也成功输出等价对象；
+随后把修改后的完整对话对象以单行 JSON 输出到标准输出；输入文件字节
+保持不变，不创建结果文件。
+set-node-text 先完成与 validate 相同的整份校验，再只把指定节点的
+text 替换为新正文：节点编号按原字符串精确匹配，起点、结尾与不可达
+节点都可修改，自引用与合法循环不影响命令结束；新正文按传入字符串
+原样保存（允许空字符串、纯空白、中文、引号、反斜杠与换行，不解释为
+JSON、文件路径或指令），新正文与原值相同时也成功输出等价对象；
 随后把修改后的完整对话对象以单行 JSON 输出到标准输出；输入文件字节
 保持不变，不创建结果文件。
 仅使用 Python 3 标准库，无需网络、外部账号或额外依赖。
@@ -78,6 +86,12 @@ RENAME_USAGE = (
 RETARGET_USAGE = (
     "python dialogue.py retarget-option <文件路径> --node <来源编号>"
     " --choice <选项编号> --to <目标编号>"
+)
+
+# set-node-text 只接受「路径 + --node 节点编号 + --text 新正文」的固定
+# 顺序，参数错误专用的单行用法说明。
+SET_NODE_TEXT_USAGE = (
+    "python dialogue.py set-node-text <文件路径> --node <节点编号> --text <新正文>"
 )
 
 
@@ -532,6 +546,32 @@ def cmd_retarget_option(path, source_id, choice_arg, target_id):
     return 0
 
 
+def cmd_set_node_text(path, node_id, new_text):
+    # 修改正文前先完成与 validate 相同的整份结构与引用校验；不可达节点中的
+    # 错误同样先于此处报告，不能借替换正文绕过原文件校验。读取、校验与
+    # 失败处理和 rename-node、retarget-option 共用同一前置流程，返回的
+    # 原始对象 data 供就地修改，使顶层额外字段、键顺序与全部未涉及的
+    # JSON 值原样保留。
+    data, _, nodes = load_dialogue_for_edit(path)
+
+    # 节点编号按原字符串精确匹配，不裁剪首尾空白。
+    node = find_node(nodes, node_id)
+    if node is None:
+        fail("文件中不存在编号为 {!r} 的节点".format(node_id))
+
+    # 只改选中节点的 text：新正文按传入字符串原样保存（空字符串、纯空白、
+    # 中文、引号、反斜杠与换行都照收，不解释为 JSON、文件路径或指令）；
+    # start、节点编号、全部选项、其他节点文字、各层额外字段的 JSON 值及
+    # 节点与选项数组顺序全部保持原样；新正文与原值相同时这一赋值为幂等
+    # 操作，输出与原对象等价。
+    node["text"] = new_text
+
+    # 只向标准输出写修改后的完整对话对象（单行 JSON 加换行，中文不转义，
+    # 正文中的换行按 JSON 规则转义）；输入文件字节不变，也不创建结果文件。
+    sys.stdout.write(json.dumps(data, ensure_ascii=False) + "\n")
+    return 0
+
+
 def parse_optional_node_args(rest, usage):
     """解析可选的 --node 键值对（至多一次），inspect 与 references 共用。
 
@@ -647,6 +687,17 @@ def main(argv):
                 or argv[7] != "--to"):
             fail(RETARGET_USAGE)
         return cmd_retarget_option(argv[2], argv[4], argv[6], argv[8])
+    if command == "set-node-text":
+        # 只接受「一个文件路径 + 一次分写的 --node 节点编号 + 一次分写的
+        # --text 新正文」的固定顺序：缺少路径或编号/正文值、--node/--text
+        # 重复、未知或额外参数、--node=编号 或 --text=正文 连写形式、两对
+        # 参数顺序颠倒，以及路径位置形似选项的记号，都在读取文件前以单行
+        # 用法说明拒绝。编号与正文位置的值一律照收为原字符串（包括空
+        # 字符串、纯空白与形似选项的记号），不作任何解释。
+        if (len(argv) != 7 or argv[2].startswith("-")
+                or argv[3] != "--node" or argv[5] != "--text"):
+            fail(SET_NODE_TEXT_USAGE)
+        return cmd_set_node_text(argv[2], argv[4], argv[6])
     fail(USAGE)
 
 
