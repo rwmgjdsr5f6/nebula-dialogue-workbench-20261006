@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""本地对话命令行程序：校验对话 JSON 结构，并进行一次分支预览、只读节点查看、入向引用查询、不可达节点报告、无结尾路径报告或路线查询。
+"""本地对话命令行程序：校验对话 JSON 结构，并进行一次分支预览、只读节点查看、入向引用查询、不可达节点报告、无结尾路径报告、路线查询或节点重命名。
 
 用法：
     python dialogue.py validate <文件路径>
@@ -9,6 +9,7 @@
     python dialogue.py unreachable <文件路径>
     python dialogue.py no-ending <文件路径>
     python dialogue.py route <文件路径> --node <目标编号>
+    python dialogue.py rename-node <文件路径> --node <旧编号> --to <新编号>
 
 preview 省略 --node 时从 start 出发；--choice 与 --node 两对参数顺序可互换。
 inspect 省略 --node 时查看 start 指定的节点，只输出该节点信息，不选择选项。
@@ -21,6 +22,11 @@ no-ending 先完成与 validate 相同的整份校验，再报告从 start 沿�
 route 先完成与 validate 相同的整份校验，再给出从 start 到指定节点的
 路线：依次经过的选项编号序列，经过选项数量最少者优先，并列时取完整
 选项编号序列数值字典序最小者；目标不可达时路线为 null，查询为只读。
+rename-node 先完成与 validate 相同的整份校验，再把指定节点的 id 改为
+新编号：若 start 等于旧编号则同步更新，并更新整份对话中所有等于旧编号
+的 options[].target（含不可达来源、重复引用、自引用与循环中的引用）；
+其余字段与取值保持原样。结果以单行 JSON 输出到标准输出，输入文件
+字节不变，不创建结果文件。
 仅使用 Python 3 标准库，无需网络、外部账号或额外依赖。
 """
 
@@ -53,6 +59,12 @@ NO_ENDING_USAGE = "python dialogue.py no-ending <文件路径>"
 
 # route 只接受一个文件路径加一次分写的 --node，参数错误专用的单行用法说明。
 ROUTE_USAGE = "python dialogue.py route <文件路径> --node <目标编号>"
+
+# rename-node 只接受「路径 + --node 旧编号 + --to 新编号」这一固定顺序，
+# 参数错误专用的单行用法说明。
+RENAME_NODE_USAGE = (
+    "python dialogue.py rename-node <文件路径> --node <旧编号> --to <新编号>"
+)
 
 
 class DialogueError(Exception):
@@ -418,6 +430,45 @@ def cmd_route(path, node_arg):
     return 0
 
 
+def cmd_rename_node(path, old_id, new_id):
+    # 重命名前先完成整份文件校验（不可达节点的结构或引用错误也在此暴露，
+    # 先于任何重命名检查报出）。保留解析后的完整对象用于输出。
+    data = load_dialogue(path)
+    try:
+        validate_dialogue(data)
+    except DialogueError as exc:
+        fail("校验失败：{}".format(exc))
+    nodes = data["nodes"]
+
+    # 旧编号与新编号均按原字符串精确匹配，不裁剪首尾空白。
+    if find_node(nodes, old_id) is None:
+        fail("文件中不存在编号为 {!r} 的节点".format(old_id))
+    if new_id.strip() == "":
+        fail("新编号必须包含非空白字符")
+    # 新旧编号相同时不视为冲突（就是同一节点）；否则新编号不得已被占用。
+    if new_id != old_id and find_node(nodes, new_id) is not None:
+        fail("新编号已被其他节点使用")
+
+    # 只改三类位置：start 字段、节点自身的 id、各选项的 target。
+    # 其他字段（text、额外字段等）即使值碰巧等于旧编号也不替换。
+    # 节点与选项数组顺序及其余取值保持原样；沿全部节点与选项逐项改写，
+    # 不可达来源、重复引用、自引用与循环中的引用都被覆盖，且只扫描一遍，
+    # 循环不影响结束。新旧编号相同时各项赋值均为原值，输出与原对象等价。
+    if data["start"] == old_id:
+        data["start"] = new_id
+    for node in nodes:
+        if node["id"] == old_id:
+            node["id"] = new_id
+        for option in node["options"]:
+            if option["target"] == old_id:
+                option["target"] = new_id
+
+    # 结果只写标准输出：单行 JSON 加一个结尾换行，中文不转义；
+    # 输入文件字节不变，不创建结果文件。
+    sys.stdout.write(json.dumps(data, ensure_ascii=False) + "\n")
+    return 0
+
+
 def parse_optional_node_args(rest, usage):
     """解析可选的 --node 键值对（至多一次），inspect 与 references 共用。
 
@@ -511,6 +562,16 @@ def main(argv):
                 or argv[3] != "--node"):
             fail(ROUTE_USAGE)
         return cmd_route(argv[2], argv[4])
+    if command == "rename-node":
+        # 只接受「一个文件路径 + 一次分写的 --node 旧编号 + 一次分写的
+        # --to 新编号」这一固定顺序：缺少路径或编号值、--node/--to 重复、
+        # 未知或额外参数、--node=编号 或 --to=编号 连写形式、两对参数顺序
+        # 互换，以及路径位置形似选项的记号，都在读取文件前以单行用法说明
+        # 拒绝。编号值本身形似选项（如 -x）照收，留给后续检查。
+        if (len(argv) != 7 or argv[2].startswith("-")
+                or argv[3] != "--node" or argv[5] != "--to"):
+            fail(RENAME_NODE_USAGE)
+        return cmd_rename_node(argv[2], argv[4], argv[6])
     fail(USAGE)
 
 
