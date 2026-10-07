@@ -191,13 +191,17 @@ def load_validated_dialogue(path):
     依次复用 load_dialogue（文件读取、UTF-8 解码、JSON 语法错误的报告）
     与 validate_dialogue（含不可达节点在内的结构与引用校验）；校验失败
     在此统一转换为「校验失败：…」说明并以退出码 2 结束。成功时返回
-    (start, nodes)，与 validate_dialogue 的返回值一致。
+    (data, start, nodes)：data 是 load_dialogue 解析出的完整原始对象，
+    需要在其上改写的编辑命令据此保留顶层与各节点、选项上的额外字段、
+    键顺序及全部未涉及的 JSON 值；start、nodes 与 validate_dialogue
+    的返回值一致，nodes 本身就是 data["nodes"]。
     """
     data = load_dialogue(path)
     try:
-        return validate_dialogue(data)
+        start, nodes = validate_dialogue(data)
     except DialogueError as exc:
         fail("校验失败：{}".format(exc))
+    return data, start, nodes
 
 
 def find_node(nodes, node_id):
@@ -289,7 +293,7 @@ def locate_option(options, choice_arg, origin_id, origin_label):
 
 def cmd_preview(path, choice_arg, node_arg=None):
     # 预览前先完成整份文件校验（未选中分支的结构或引用错误也在此暴露）。
-    start, nodes = load_validated_dialogue(path)
+    _data, start, nodes = load_validated_dialogue(path)
 
     # 省略 --node 时仍从 start 出发；节点编号按原字符串精确匹配。
     origin_id = start if node_arg is None else node_arg
@@ -310,7 +314,7 @@ def cmd_preview(path, choice_arg, node_arg=None):
 
 def cmd_inspect(path, node_arg=None):
     # 查看前先完成整份文件校验（不可达节点的结构或引用错误也在此暴露）。
-    start, nodes = load_validated_dialogue(path)
+    _data, start, nodes = load_validated_dialogue(path)
 
     # 省略 --node 时查看 start 指定的节点；节点编号按原字符串精确匹配。
     origin_id = start if node_arg is None else node_arg
@@ -333,7 +337,7 @@ def cmd_inspect(path, node_arg=None):
 
 def cmd_references(path, node_arg=None):
     # 查询前先完成整份文件校验（不可达节点的结构或引用错误也在此暴露）。
-    start, nodes = load_validated_dialogue(path)
+    _data, start, nodes = load_validated_dialogue(path)
 
     # 省略 --node 时查询 start 指定的节点；节点编号按原字符串精确匹配。
     target_id = start if node_arg is None else node_arg
@@ -360,7 +364,7 @@ def cmd_references(path, node_arg=None):
 def cmd_unreachable(path):
     # 报告前先完成与 validate 相同的整份结构与引用校验；不可达节点的
     # 结构或引用非法时同样以校验失败告终，不输出报告。
-    start, nodes = load_validated_dialogue(path)
+    _data, start, nodes = load_validated_dialogue(path)
 
     # 只沿选项 target 的正向引用求可达集合；不可达节点指向可达节点
     # 属于反向边，不会因此被计入。结果按原 nodes 顺序、去重排列。
@@ -376,7 +380,7 @@ def cmd_unreachable(path):
 def cmd_no_ending(path):
     # 报告前先完成与 validate 相同的整份结构与引用校验；不可达节点的
     # 结构或引用非法时同样以校验失败告终，不输出报告。
-    start, nodes = load_validated_dialogue(path)
+    _data, start, nodes = load_validated_dialogue(path)
 
     # 先求从 start 沿 target 的可达集合，再求能在有限步走到结尾的集合；
     # 报告两者之差——已经能进入、却无法走到任何结尾的节点。结果按原
@@ -436,7 +440,7 @@ def best_route(start, target, nodes):
 
 def cmd_route(path, node_arg):
     # 查询前先完成整份校验（不可达节点的结构或引用错误也在此暴露）。
-    start, nodes = load_validated_dialogue(path)
+    _data, start, nodes = load_validated_dialogue(path)
 
     # 目标编号按原字符串精确匹配，不裁剪首尾空白。
     if find_node(nodes, node_arg) is None:
@@ -453,13 +457,9 @@ def cmd_route(path, node_arg):
 
 def cmd_rename_node(path, old_id, new_id):
     # 重命名前先完成与 validate 相同的整份结构与引用校验；不可达节点中的
-    # 错误同样先于此处报告。保留 load_dialogue 返回的原始对象并在其上
-    # 修改，使顶层额外字段、键顺序与全部未涉及的 JSON 值原样保留。
-    data = load_dialogue(path)
-    try:
-        start, nodes = validate_dialogue(data)
-    except DialogueError as exc:
-        fail("校验失败：{}".format(exc))
+    # 错误同样先于此处报告。共用前置流程返回的 data 是完整原始对象，在其
+    # 上修改即可使顶层额外字段、键顺序与全部未涉及的 JSON 值原样保留。
+    data, start, nodes = load_validated_dialogue(path)
 
     # 旧编号与新编号均按原字符串精确匹配，不裁剪首尾空白。
     if find_node(nodes, old_id) is None:
@@ -491,13 +491,9 @@ def cmd_rename_node(path, old_id, new_id):
 def cmd_retarget_option(path, source_id, choice_arg, target_id):
     # 重定向前先完成与 validate 相同的整份结构与引用校验；未选中的分支、
     # 不可达节点中的错误，以及待改 target 本身的悬空引用都先在此报出。
-    # 保留 load_dialogue 返回的原始对象并在其上修改，使顶层额外字段、
-    # 键顺序与全部未涉及的 JSON 值原样保留。
-    data = load_dialogue(path)
-    try:
-        start, nodes = validate_dialogue(data)
-    except DialogueError as exc:
-        fail("校验失败：{}".format(exc))
+    # 共用前置流程返回的 data 是完整原始对象，在其上修改即可使顶层额外
+    # 字段、键顺序与全部未涉及的 JSON 值原样保留。
+    data, _start, nodes = load_validated_dialogue(path)
 
     # 来源编号按原字符串精确匹配，不裁剪首尾空白。
     source_node = find_node(nodes, source_id)
