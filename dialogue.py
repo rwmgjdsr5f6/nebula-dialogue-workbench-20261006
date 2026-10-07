@@ -185,6 +185,22 @@ def validate_dialogue(data):
     return start, nodes
 
 
+def load_dialogue_for_edit(path):
+    """读取、解析并整份校验，返回 (data, start, nodes)，供编辑命令使用。
+
+    读取、校验与失败处理和只读命令共用的前置流程完全一致（同一实现，
+    见 load_validated_dialogue）；返回值额外带上 load_dialogue 解析出的
+    原始对象 data，编辑命令在其上就地修改，使顶层额外字段、键顺序与
+    全部未涉及的 JSON 值原样保留。
+    """
+    data = load_dialogue(path)
+    try:
+        start, nodes = validate_dialogue(data)
+    except DialogueError as exc:
+        fail("校验失败：{}".format(exc))
+    return data, start, nodes
+
+
 def load_validated_dialogue(path):
     """读取文件、解析 JSON 并完成整份校验，是各命令共用的前置流程。
 
@@ -193,11 +209,8 @@ def load_validated_dialogue(path):
     在此统一转换为「校验失败：…」说明并以退出码 2 结束。成功时返回
     (start, nodes)，与 validate_dialogue 的返回值一致。
     """
-    data = load_dialogue(path)
-    try:
-        return validate_dialogue(data)
-    except DialogueError as exc:
-        fail("校验失败：{}".format(exc))
+    _, start, nodes = load_dialogue_for_edit(path)
+    return start, nodes
 
 
 def find_node(nodes, node_id):
@@ -453,13 +466,10 @@ def cmd_route(path, node_arg):
 
 def cmd_rename_node(path, old_id, new_id):
     # 重命名前先完成与 validate 相同的整份结构与引用校验；不可达节点中的
-    # 错误同样先于此处报告。保留 load_dialogue 返回的原始对象并在其上
-    # 修改，使顶层额外字段、键顺序与全部未涉及的 JSON 值原样保留。
-    data = load_dialogue(path)
-    try:
-        start, nodes = validate_dialogue(data)
-    except DialogueError as exc:
-        fail("校验失败：{}".format(exc))
+    # 错误同样先于此处报告。读取、校验与失败处理和 retarget-option 共用
+    # 同一前置流程，返回的原始对象 data 供就地修改，使顶层额外字段、
+    # 键顺序与全部未涉及的 JSON 值原样保留。
+    data, start, nodes = load_dialogue_for_edit(path)
 
     # 旧编号与新编号均按原字符串精确匹配，不裁剪首尾空白。
     if find_node(nodes, old_id) is None:
@@ -491,13 +501,10 @@ def cmd_rename_node(path, old_id, new_id):
 def cmd_retarget_option(path, source_id, choice_arg, target_id):
     # 重定向前先完成与 validate 相同的整份结构与引用校验；未选中的分支、
     # 不可达节点中的错误，以及待改 target 本身的悬空引用都先在此报出。
-    # 保留 load_dialogue 返回的原始对象并在其上修改，使顶层额外字段、
-    # 键顺序与全部未涉及的 JSON 值原样保留。
-    data = load_dialogue(path)
-    try:
-        start, nodes = validate_dialogue(data)
-    except DialogueError as exc:
-        fail("校验失败：{}".format(exc))
+    # 读取、校验与失败处理和 rename-node 共用同一前置流程，返回的原始
+    # 对象 data 供就地修改，使顶层额外字段、键顺序与全部未涉及的
+    # JSON 值原样保留。
+    data, _, nodes = load_dialogue_for_edit(path)
 
     # 来源编号按原字符串精确匹配，不裁剪首尾空白。
     source_node = find_node(nodes, source_id)
