@@ -621,6 +621,54 @@ def parse_preview_args(rest):
     return values["--choice"], values.get("--node")
 
 
+def parse_fixed_edit_args(args, option_names, usage):
+    """解析编辑命令固定顺序的参数，rename-node/retarget-option/
+    set-node-text 共用同一套检查，不再各自维护。
+
+    args 为文件路径位置开始的全部参数（即 argv[2:]）；option_names 是
+    该命令唯一允许的分写选项记号序列，如 ("--node", "--to")，三处命令
+    各自的参数约束只体现在这一序列上。合法形态必须恰好是
+    ``路径 + 选项1 值1 + 选项2 值2 ...``，各选项记号与 option_names
+    逐位一致；合法时返回 (路径, [各值])，值一律按原字符串传递，不裁剪
+    首尾空白，空字符串、纯空白与形似选项（如 --node、-x）的值都不重新
+    解释，留给后续业务检查。
+
+    缺少路径或值、重复或多余参数、未知参数、参数对顺序颠倒（含选项
+    出现在路径之前）、--node=编号 等键值连写形式，以及以减号开头的
+    路径，都按用法错误处理：以调用方给定的 usage 文字报告并在读取文件
+    前结束；因此即使路径不存在或文件内容非法，格式错误也只返回用法。
+    """
+    if len(args) != 1 + 2 * len(option_names) or args[0].startswith("-"):
+        fail(usage)
+    values = []
+    for i, name in enumerate(option_names):
+        if args[1 + 2 * i] != name:
+            fail(usage)
+        values.append(args[2 + 2 * i])
+    return args[0], values
+
+
+def parse_rename_node_args(args):
+    """rename-node 的固定参数：路径 + --node 旧编号 + --to 新编号。"""
+    path, values = parse_fixed_edit_args(args, ("--node", "--to"), RENAME_USAGE)
+    return path, values[0], values[1]
+
+
+def parse_retarget_option_args(args):
+    """retarget-option 的固定参数：路径 + --node 来源编号 +
+    --choice 选项编号 + --to 目标编号。"""
+    path, values = parse_fixed_edit_args(
+        args, ("--node", "--choice", "--to"), RETARGET_USAGE)
+    return path, values[0], values[1], values[2]
+
+
+def parse_set_node_text_args(args):
+    """set-node-text 的固定参数：路径 + --node 节点编号 + --text 新正文。"""
+    path, values = parse_fixed_edit_args(
+        args, ("--node", "--text"), SET_NODE_TEXT_USAGE)
+    return path, values[0], values[1]
+
+
 def main(argv):
     if len(argv) < 2:
         fail(USAGE)
@@ -666,38 +714,26 @@ def main(argv):
             fail(ROUTE_USAGE)
         return cmd_route(argv[2], argv[4])
     if command == "rename-node":
-        # 只接受「一个文件路径 + 一次分写的 --node 旧编号 + 一次分写的
-        # --to 新编号」的固定顺序：缺少路径或编号值、--node/--to 重复、
-        # 未知或额外参数、--node=编号 或 --to=编号 连写形式、两对参数
-        # 顺序颠倒，以及路径位置形似选项的记号，都在读取文件前以单行
-        # 用法说明拒绝。
-        if (len(argv) != 7 or argv[2].startswith("-")
-                or argv[3] != "--node" or argv[5] != "--to"):
-            fail(RENAME_USAGE)
-        return cmd_rename_node(argv[2], argv[4], argv[6])
+        # 参数入口与 retarget-option、set-node-text 共用
+        # parse_fixed_edit_args 的同一套检查：只接受「路径 + --node 旧编号
+        # + --to 新编号」的固定顺序，任何格式问题都在读文件前只报
+        # RENAME_USAGE；编号值按原字符串传给重命名的业务检查。
+        path, old_id, new_id = parse_rename_node_args(argv[2:])
+        return cmd_rename_node(path, old_id, new_id)
     if command == "retarget-option":
-        # 只接受「一个文件路径 + 一次分写的 --node 来源编号 + 一次分写的
-        # --choice 选项编号 + 一次分写的 --to 目标编号」的固定顺序：缺少
-        # 路径或任一编号值、--node/--choice/--to 重复、未知或额外参数、
-        # --node=编号、--choice=1 或 --to=编号 连写形式、三对参数顺序
-        # 颠倒，以及路径位置形似选项的记号，都在读取文件前以单行用法
-        # 说明拒绝。
-        if (len(argv) != 9 or argv[2].startswith("-")
-                or argv[3] != "--node" or argv[5] != "--choice"
-                or argv[7] != "--to"):
-            fail(RETARGET_USAGE)
-        return cmd_retarget_option(argv[2], argv[4], argv[6], argv[8])
+        # 同样的固定顺序检查只在 parse_fixed_edit_args 维护一处：只接受
+        # 「路径 + --node 来源编号 + --choice 选项编号 + --to 目标编号」；
+        # 来源、选项与目标值按原字符串传递，选项编号在定位来源节点后才
+        # 按已有整数规则解析。
+        path, source_id, choice_arg, target_id = parse_retarget_option_args(
+            argv[2:])
+        return cmd_retarget_option(path, source_id, choice_arg, target_id)
     if command == "set-node-text":
-        # 只接受「一个文件路径 + 一次分写的 --node 节点编号 + 一次分写的
-        # --text 新正文」的固定顺序：缺少路径或编号/正文值、--node/--text
-        # 重复、未知或额外参数、--node=编号 或 --text=正文 连写形式、两对
-        # 参数顺序颠倒，以及路径位置形似选项的记号，都在读取文件前以单行
-        # 用法说明拒绝。编号与正文位置的值一律照收为原字符串（包括空
-        # 字符串、纯空白与形似选项的记号），不作任何解释。
-        if (len(argv) != 7 or argv[2].startswith("-")
-                or argv[3] != "--node" or argv[5] != "--text"):
-            fail(SET_NODE_TEXT_USAGE)
-        return cmd_set_node_text(argv[2], argv[4], argv[6])
+        # 同样的固定顺序检查只在 parse_fixed_edit_args 维护一处：只接受
+        # 「路径 + --node 节点编号 + --text 新正文」；编号与正文值按原
+        # 字符串照收（空字符串、纯空白与形似选项的记号都不重新解释）。
+        path, node_id, new_text = parse_set_node_text_args(argv[2:])
+        return cmd_set_node_text(path, node_id, new_text)
     fail(USAGE)
 
 
