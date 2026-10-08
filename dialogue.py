@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""本地对话命令行程序：校验对话 JSON 结构，并进行一次分支预览、只读节点查看、入向引用查询、不可达节点报告、无结尾路径报告、路线查询、节点重命名、选项目标重定向、节点正文修改、选项文字修改、单个选项追加或单个选项删除。
+"""本地对话命令行程序：校验对话 JSON 结构，并进行一次分支预览、只读节点查看、入向引用查询、不可达节点报告、无结尾路径报告、路线查询、节点重命名、选项目标重定向、节点正文修改、选项文字修改、单个选项追加、单个选项删除或单个结尾节点新增。
 
 用法：
     python dialogue.py validate <文件路径>
@@ -15,6 +15,7 @@
     python dialogue.py set-node-text <文件路径> --node <节点编号> --text <新正文>
     python dialogue.py set-option-text <文件路径> --node <来源编号> --choice <选项编号> --text <新文字>
     python dialogue.py remove-option <文件路径> --node <来源编号> --choice <选项编号>
+    python dialogue.py add-node <文件路径> --node <新编号> --text <正文>
 
 preview 省略 --node 时从 start 出发；--choice 与 --node 两对参数顺序可互换。
 inspect 省略 --node 时查看 start 指定的节点，只输出该节点信息，不选择选项。
@@ -69,6 +70,14 @@ options 中指定选项（编号从 1 开始、按数组顺序确定）：剩余
 循环中的选项都允许删除；目标节点与其他节点仍保留，不顺带删除失去
 引用的内容；随后把修改后的完整对话对象以单行 JSON 输出到标准输出；
 输入文件字节保持不变，不创建结果文件。
+add-node 先完成与 validate 相同的整份校验，再在 nodes 末尾追加一个
+仅含 id、text、options 的节点：编号与正文分别来自 --node 与 --text，
+options 为空数组；新节点暂时没有入向选项也可成功，不自动改变 start，
+也不为其他节点增加选项；编号按原字符串保存和比较，不裁剪首尾空白，
+与任一已有编号完全相同（即使正文相同）都拒绝；正文按传入字符串原样
+保存（允许空字符串、纯空白、中文、引号、反斜杠与换行，不解释为
+JSON、文件路径或指令）；随后把修改后的完整对话对象以单行 JSON 输出
+到标准输出；输入文件字节保持不变，不创建结果文件。
 仅使用 Python 3 标准库，无需网络、外部账号或额外依赖。
 """
 
@@ -140,6 +149,12 @@ ADD_OPTION_USAGE = (
 REMOVE_OPTION_USAGE = (
     "python dialogue.py remove-option <文件路径> --node <来源编号>"
     " --choice <选项编号>"
+)
+
+# add-node 只接受「路径 + --node 新编号 + --text 正文」的固定顺序，
+# 参数错误专用的单行用法说明。
+ADD_NODE_USAGE = (
+    "python dialogue.py add-node <文件路径> --node <新编号> --text <正文>"
 )
 
 
@@ -720,6 +735,34 @@ def cmd_remove_option(path, source_id, choice_arg):
     return 0
 
 
+def cmd_add_node(path, new_id, new_text):
+    # 新增节点前先完成与 validate 相同的整份结构与引用校验；不可达节点中的
+    # 错误同样先于此处报告，原文件指向待新增编号的悬空引用也不能靠本次
+    # 新增绕过。读取、校验与失败处理和其他编辑命令共用同一前置流程，返回的
+    # 原始对象 data 供就地修改，使顶层额外字段、键顺序与全部未涉及的
+    # JSON 值原样保留。
+    data, _, nodes = load_dialogue_for_edit(path)
+
+    # 新编号按原字符串保存和比较，不裁剪首尾空白：先检查是否含非空白字符，
+    # 再检查是否与任一已有编号完全相同；即使重复编号的正文相同也拒绝。
+    if new_id.strip() == "":
+        fail("新编号必须包含非空白字符")
+    if find_node(nodes, new_id) is not None:
+        fail("新编号已被其他节点使用")
+
+    # 在 nodes 末尾追加仅含 id、text、options 的新节点，options 为空数组：
+    # 新节点暂时没有入向选项也可成功，不自动改变 start，也不为其他节点
+    # 增加选项；正文按传入字符串原样保存（空字符串、纯空白、中文、引号、
+    # 反斜杠与换行都照收，不解释为 JSON、文件路径或指令）。start、全部
+    # 已有节点与选项、各层额外字段的 JSON 值及原数组顺序全部保持原样。
+    nodes.append({"id": new_id, "text": new_text, "options": []})
+
+    # 只向标准输出写修改后的完整对话对象（单行 JSON 加换行，中文不转义，
+    # 正文中的换行按 JSON 规则转义）；输入文件字节不变，也不创建结果文件。
+    sys.stdout.write(json.dumps(data, ensure_ascii=False) + "\n")
+    return 0
+
+
 def parse_optional_node_args(rest, usage):
     """解析可选的 --node 键值对（至多一次），inspect 与 references 共用。
 
@@ -771,8 +814,8 @@ def parse_preview_args(rest):
 
 def parse_fixed_edit_args(args, option_names, usage):
     """解析编辑命令固定顺序的参数，rename-node/retarget-option/
-    set-node-text/set-option-text/add-option/remove-option 共用同一套
-    检查，不再各自维护。
+    set-node-text/set-option-text/add-option/remove-option/add-node
+    共用同一套检查，不再各自维护。
 
     args 为文件路径位置开始的全部参数（即 argv[2:]）；option_names 是
     该命令唯一允许的分写选项记号序列，如 ("--node", "--to")，三处命令
@@ -839,6 +882,13 @@ def parse_remove_option_args(args):
     --choice 选项编号。"""
     path, values = parse_fixed_edit_args(
         args, ("--node", "--choice"), REMOVE_OPTION_USAGE)
+    return path, values[0], values[1]
+
+
+def parse_add_node_args(args):
+    """add-node 的固定参数：路径 + --node 新编号 + --text 正文。"""
+    path, values = parse_fixed_edit_args(
+        args, ("--node", "--text"), ADD_NODE_USAGE)
     return path, values[0], values[1]
 
 
@@ -929,6 +979,12 @@ def main(argv):
         # 解释），选项编号在定位来源节点后才按已有整数规则解析。
         path, source_id, choice_arg = parse_remove_option_args(argv[2:])
         return cmd_remove_option(path, source_id, choice_arg)
+    if command == "add-node":
+        # 同样的固定顺序检查只在 parse_fixed_edit_args 维护一处：只接受
+        # 「路径 + --node 新编号 + --text 正文」；编号与正文值按原字符串
+        # 照收（空字符串、纯空白与形似选项的记号都不重新解释）。
+        path, new_id, new_text = parse_add_node_args(argv[2:])
+        return cmd_add_node(path, new_id, new_text)
     fail(USAGE)
 
 
