@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""本地对话命令行程序：校验对话 JSON 结构，并进行一次分支预览、只读节点查看、入向引用查询、不可达节点报告、无结尾路径报告、路线查询、节点重命名、选项目标重定向或节点正文修改。
+"""本地对话命令行程序：校验对话 JSON 结构，并进行一次分支预览、只读节点查看、入向引用查询、不可达节点报告、无结尾路径报告、路线查询、节点重命名、选项目标重定向、节点正文修改、选项文字修改、单个选项追加或单个选项删除。
 
 用法：
     python dialogue.py validate <文件路径>
@@ -14,6 +14,7 @@
     python dialogue.py add-option <文件路径> --node <来源编号> --text <选项文字> --to <目标编号>
     python dialogue.py set-node-text <文件路径> --node <节点编号> --text <新正文>
     python dialogue.py set-option-text <文件路径> --node <来源编号> --choice <选项编号> --text <新文字>
+    python dialogue.py remove-option <文件路径> --node <来源编号> --choice <选项编号>
 
 preview 省略 --node 时从 start 出发；--choice 与 --node 两对参数顺序可互换。
 inspect 省略 --node 时查看 start 指定的节点，只输出该节点信息，不选择选项。
@@ -60,6 +61,14 @@ add-option 先完成与 validate 相同的整份校验，再在来源节点 opti
 路径或指令），文字或目标与已有选项重复时不去重，每次只新增一项，
 已有选项编号不变；随后把修改后的完整对话对象以单行 JSON 输出到
 标准输出；输入文件字节保持不变，不创建结果文件。
+remove-option 先完成与 validate 相同的整份校验，再只移除来源节点
+options 中指定选项（编号从 1 开始、按数组顺序确定）：剩余选项保持
+相对顺序，删除位置之后的编号随数组位置前移，文字或目标相同的其他
+选项仍保留，删除最后一项后 options 为空数组、该节点成为结尾；来源
+编号按原字符串精确匹配，不裁剪首尾空白，不可达来源、自引用与合法
+循环中的选项都允许删除；目标节点与其他节点仍保留，不顺带删除失去
+引用的内容；随后把修改后的完整对话对象以单行 JSON 输出到标准输出；
+输入文件字节保持不变，不创建结果文件。
 仅使用 Python 3 标准库，无需网络、外部账号或额外依赖。
 """
 
@@ -124,6 +133,13 @@ SET_OPTION_TEXT_USAGE = (
 ADD_OPTION_USAGE = (
     "python dialogue.py add-option <文件路径> --node <来源编号>"
     " --text <选项文字> --to <目标编号>"
+)
+
+# remove-option 只接受「路径 + --node 来源编号 + --choice 选项编号」
+# 的固定顺序，参数错误专用的单行用法说明。
+REMOVE_OPTION_USAGE = (
+    "python dialogue.py remove-option <文件路径> --node <来源编号>"
+    " --choice <选项编号>"
 )
 
 
@@ -668,6 +684,42 @@ def cmd_add_option(path, source_id, new_text, target_id):
     return 0
 
 
+def cmd_remove_option(path, source_id, choice_arg):
+    # 删除选项前先完成与 validate 相同的整份结构与引用校验；未选中的分支、
+    # 不可达节点中的错误，以及待删选项自身的悬空 target 都先在此报出，
+    # 不能借删除绕过原文件错误。读取、校验与失败处理和其他编辑命令共用
+    # 同一前置流程，返回的原始对象 data 供就地修改，使顶层额外字段、
+    # 键顺序与全部未涉及的 JSON 值原样保留。
+    data, _, nodes = load_dialogue_for_edit(path)
+
+    # 来源编号按原字符串精确匹配，不裁剪首尾空白。
+    source_node = find_node(nodes, source_id)
+    if source_node is None:
+        fail("文件中不存在编号为 {!r} 的节点".format(source_id))
+
+    # 选项定位与 preview、retarget-option、set-option-text 共用同一流程，
+    # 措辞固定为显式节点的「出发节点」：整数解析、结尾无选项与编号范围
+    # 依次检查。
+    option = locate_option(
+        source_node["options"], choice_arg, source_id, "出发节点")
+
+    # 只移除选中项：locate_option 返回的是 options 中的同一对象，用对象
+    # 身份定位下标，即使存在文字与 target 完全相同的其他选项也只删这一项。
+    # 剩余选项保持相对顺序，删除位置之后的编号随数组位置前移；删除最后
+    # 一项后 options 为空数组，该节点随之成为结尾。start、节点编号与正文、
+    # 其他选项、各层额外字段的 JSON 值及节点与剩余选项的数组顺序全部保持
+    # 原样；目标节点与其他节点（含因此失去引用的节点）仍保留，不做级联
+    # 删除，也不再重新校验引用——校验针对的是未修改的原文件。
+    options = source_node["options"]
+    index = next(i for i, candidate in enumerate(options) if candidate is option)
+    del options[index]
+
+    # 只向标准输出写修改后的完整对话对象（单行 JSON 加换行，中文不转义）；
+    # 输入文件字节不变，也不创建任何结果文件。
+    sys.stdout.write(json.dumps(data, ensure_ascii=False) + "\n")
+    return 0
+
+
 def parse_optional_node_args(rest, usage):
     """解析可选的 --node 键值对（至多一次），inspect 与 references 共用。
 
@@ -719,7 +771,8 @@ def parse_preview_args(rest):
 
 def parse_fixed_edit_args(args, option_names, usage):
     """解析编辑命令固定顺序的参数，rename-node/retarget-option/
-    set-node-text/set-option-text/add-option 共用同一套检查，不再各自维护。
+    set-node-text/set-option-text/add-option/remove-option 共用同一套
+    检查，不再各自维护。
 
     args 为文件路径位置开始的全部参数（即 argv[2:]）；option_names 是
     该命令唯一允许的分写选项记号序列，如 ("--node", "--to")，三处命令
@@ -779,6 +832,14 @@ def parse_add_option_args(args):
     path, values = parse_fixed_edit_args(
         args, ("--node", "--text", "--to"), ADD_OPTION_USAGE)
     return path, values[0], values[1], values[2]
+
+
+def parse_remove_option_args(args):
+    """remove-option 的固定参数：路径 + --node 来源编号 +
+    --choice 选项编号。"""
+    path, values = parse_fixed_edit_args(
+        args, ("--node", "--choice"), REMOVE_OPTION_USAGE)
+    return path, values[0], values[1]
 
 
 def main(argv):
@@ -861,6 +922,13 @@ def main(argv):
         # 记号都不重新解释）；空 options 也可追加，因此没有选项编号参数。
         path, source_id, new_text, target_id = parse_add_option_args(argv[2:])
         return cmd_add_option(path, source_id, new_text, target_id)
+    if command == "remove-option":
+        # 同样的固定顺序检查只在 parse_fixed_edit_args 维护一处：只接受
+        # 「路径 + --node 来源编号 + --choice 选项编号」；来源与选项编号
+        # 值按原字符串传递（空字符串、纯空白与形似选项的记号都不重新
+        # 解释），选项编号在定位来源节点后才按已有整数规则解析。
+        path, source_id, choice_arg = parse_remove_option_args(argv[2:])
+        return cmd_remove_option(path, source_id, choice_arg)
     fail(USAGE)
 
 
