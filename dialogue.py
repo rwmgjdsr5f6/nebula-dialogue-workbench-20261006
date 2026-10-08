@@ -12,6 +12,7 @@
     python dialogue.py rename-node <文件路径> --node <旧编号> --to <新编号>
     python dialogue.py retarget-option <文件路径> --node <来源编号> --choice <选项编号> --to <目标编号>
     python dialogue.py set-node-text <文件路径> --node <节点编号> --text <新正文>
+    python dialogue.py set-option-text <文件路径> --node <来源编号> --choice <选项编号> --text <新文字>
 
 preview 省略 --node 时从 start 出发；--choice 与 --node 两对参数顺序可互换。
 inspect 省略 --node 时查看 start 指定的节点，只输出该节点信息，不选择选项。
@@ -42,6 +43,14 @@ text 替换为新正文：节点编号按原字符串精确匹配，起点、结
 JSON、文件路径或指令），新正文与原值相同时也成功输出等价对象；
 随后把修改后的完整对话对象以单行 JSON 输出到标准输出；输入文件字节
 保持不变，不创建结果文件。
+set-option-text 先完成与 validate 相同的整份校验，再只把来源节点
+options 中指定选项（编号从 1 开始、按数组顺序确定）的 text 改为新
+文字，选项目标关系保持不变：来源编号按原字符串精确匹配，不可达来源、
+自引用与合法循环都允许，新文字与原 text 相同时也成功输出等价对象；
+新文字按传入字符串原样保存（允许空字符串、纯空白、中文、引号、
+反斜杠与换行，不解释为 JSON、文件路径或指令）；随后把修改后的完整
+对话对象以单行 JSON 输出到标准输出；输入文件字节保持不变，不创建
+结果文件。
 仅使用 Python 3 标准库，无需网络、外部账号或额外依赖。
 """
 
@@ -92,6 +101,13 @@ RETARGET_USAGE = (
 # 顺序，参数错误专用的单行用法说明。
 SET_NODE_TEXT_USAGE = (
     "python dialogue.py set-node-text <文件路径> --node <节点编号> --text <新正文>"
+)
+
+# set-option-text 只接受「路径 + --node 来源编号 + --choice 选项编号 +
+# --text 新文字」的固定顺序，参数错误专用的单行用法说明。
+SET_OPTION_TEXT_USAGE = (
+    "python dialogue.py set-option-text <文件路径> --node <来源编号>"
+    " --choice <选项编号> --text <新文字>"
 )
 
 
@@ -572,6 +588,37 @@ def cmd_set_node_text(path, node_id, new_text):
     return 0
 
 
+def cmd_set_option_text(path, source_id, choice_arg, new_text):
+    # 修改选项文字前先完成与 validate 相同的整份结构与引用校验；未选中的
+    # 分支、不可达节点中的错误都先在此报出，不能借替换文字绕过原文件校验。
+    # 读取、校验与失败处理和 rename-node、retarget-option、set-node-text
+    # 共用同一前置流程，返回的原始对象 data 供就地修改，使顶层额外字段、
+    # 键顺序与全部未涉及的 JSON 值原样保留。
+    data, _, nodes = load_dialogue_for_edit(path)
+
+    # 来源编号按原字符串精确匹配，不裁剪首尾空白。
+    source_node = find_node(nodes, source_id)
+    if source_node is None:
+        fail("文件中不存在编号为 {!r} 的节点".format(source_id))
+
+    # 选项定位与 preview、retarget-option 共用同一流程，措辞固定为显式
+    # 节点的「出发节点」：整数解析、结尾无选项与编号范围依次检查。
+    option = locate_option(
+        source_node["options"], choice_arg, source_id, "出发节点")
+
+    # 只改选中选项的 text，其 target 与分支关系原样保留：新文字按传入
+    # 字符串原样保存（空字符串、纯空白、中文、引号、反斜杠与换行都照收，
+    # 不解释为 JSON、文件路径或指令）；start、节点编号与正文、所有
+    # target、其他选项、各层额外字段的 JSON 值及节点与选项数组顺序全部
+    # 保持原样；新文字与原值相同时这一赋值为幂等操作，输出与原对象等价。
+    option["text"] = new_text
+
+    # 只向标准输出写修改后的完整对话对象（单行 JSON 加换行，中文不转义，
+    # 文字中的换行按 JSON 规则转义）；输入文件字节不变，也不创建结果文件。
+    sys.stdout.write(json.dumps(data, ensure_ascii=False) + "\n")
+    return 0
+
+
 def parse_optional_node_args(rest, usage):
     """解析可选的 --node 键值对（至多一次），inspect 与 references 共用。
 
@@ -623,7 +670,7 @@ def parse_preview_args(rest):
 
 def parse_fixed_edit_args(args, option_names, usage):
     """解析编辑命令固定顺序的参数，rename-node/retarget-option/
-    set-node-text 共用同一套检查，不再各自维护。
+    set-node-text/set-option-text 共用同一套检查，不再各自维护。
 
     args 为文件路径位置开始的全部参数（即 argv[2:]）；option_names 是
     该命令唯一允许的分写选项记号序列，如 ("--node", "--to")，三处命令
@@ -667,6 +714,14 @@ def parse_set_node_text_args(args):
     path, values = parse_fixed_edit_args(
         args, ("--node", "--text"), SET_NODE_TEXT_USAGE)
     return path, values[0], values[1]
+
+
+def parse_set_option_text_args(args):
+    """set-option-text 的固定参数：路径 + --node 来源编号 +
+    --choice 选项编号 + --text 新文字。"""
+    path, values = parse_fixed_edit_args(
+        args, ("--node", "--choice", "--text"), SET_OPTION_TEXT_USAGE)
+    return path, values[0], values[1], values[2]
 
 
 def main(argv):
@@ -734,6 +789,14 @@ def main(argv):
         # 字符串照收（空字符串、纯空白与形似选项的记号都不重新解释）。
         path, node_id, new_text = parse_set_node_text_args(argv[2:])
         return cmd_set_node_text(path, node_id, new_text)
+    if command == "set-option-text":
+        # 同样的固定顺序检查只在 parse_fixed_edit_args 维护一处：只接受
+        # 「路径 + --node 来源编号 + --choice 选项编号 + --text 新文字」；
+        # 来源、选项与文字值按原字符串传递（空字符串、纯空白与形似选项的
+        # 记号都不重新解释），选项编号在定位来源节点后才按已有整数规则解析。
+        path, source_id, choice_arg, new_text = parse_set_option_text_args(
+            argv[2:])
+        return cmd_set_option_text(path, source_id, choice_arg, new_text)
     fail(USAGE)
 
 

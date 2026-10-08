@@ -105,6 +105,28 @@
   仅为 `python dialogue.py set-node-text <文件路径> --node <节点编号>
   --text <新正文>` 加一个换行；空字符串正文与形似选项的编号/正文值
   照收为值。
+- `test_dialogue_set_option_text.py` 覆盖 `dialogue.py set-option-text`
+  的选项文字修改：sample.json 中 `--node start --choice 1 --text
+  进入森林` 的验收结果（仅 nodes[0].options[0].text 变化、target 仍为
+  forest、其余一致）、只改选中项文字而 start/节点编号与正文/所有
+  target/其他选项/额外字段/节点与选项数组顺序原样（分支关系保留）、
+  不可达来源可用、自引用与合法循环不阻止命令、新文字与原 text 相同输出
+  等价 JSON、空字符串/纯空白/中文/引号/反斜杠/换行按传入字符串原样
+  保存、形似 JSON、文件路径或选项的文字不另作解释、中文不转义、文字
+  换行按 JSON 规则转义、来源编号首尾空白精确匹配、不创建结果文件；
+  另验证来源节点不存在沿用节点不存在说明、非整数编号、结尾无选项、
+  编号越界沿用显式 `--node` 的 preview 对应错误及来源→整数→结尾→
+  范围的检查顺序、待改选项或未选分支及不可达节点非法时先以
+  「校验失败：」定位、文件读取与 JSON 语法错误沿用既有分类。
+- `test_dialogue_set_option_text_args.py` 覆盖 `set-option-text` 的
+  参数格式：只接受「一个文件路径 + 一次分写的 `--node <来源编号>` +
+  一次分写的 `--choice <选项编号>` + 一次分写的 `--text <新文字>`」的
+  固定顺序；缺路径或任一值、`--node`/`--choice`/`--text` 重复、未知或
+  额外参数、三种连写形式、三对参数顺序颠倒、路径位置形似选项的记号均
+  在读文件前以退出码 2 拒绝，标准错误仅为
+  `python dialogue.py set-option-text <文件路径> --node <来源编号>
+  --choice <选项编号> --text <新文字>` 加一个换行；空字符串文字与形似
+  选项的编号/文字值照收为值。
 
 ## 运行
 
