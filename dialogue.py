@@ -598,6 +598,25 @@ def parse_references_args(rest):
     return parse_optional_node_args(rest, REFERENCES_USAGE)
 
 
+def parse_edit_args(argv, option_names, usage):
+    """解析编辑命令的固定位置参数，rename-node、retarget-option 与
+    set-node-text 共用。
+
+    只接受「一个文件路径 + 按 option_names 给定顺序各出现一次的分写
+    --选项 值」：缺少路径或任一值、选项重复、未知或额外参数、--选项=值
+    连写形式、参数对顺序颠倒，以及路径位置形似选项的记号，都在读取
+    文件前以调用方给定的单行用法说明拒绝。各值位置的记号一律照收为
+    原字符串（包括空字符串、纯空白与形似选项的记号），不裁剪空白，
+    也不重新解释为参数。成功时返回 (路径, 各选项值列表)，值列表与
+    option_names 一一对应。
+    """
+    if (len(argv) != 3 + 2 * len(option_names)
+            or argv[2].startswith("-")
+            or argv[3::2] != list(option_names)):
+        fail(usage)
+    return argv[2], argv[4::2]
+
+
 def parse_preview_args(rest):
     """解析 preview 的 --choice/--node 键值对（顺序可互换、各至多一次）。
 
@@ -666,38 +685,24 @@ def main(argv):
             fail(ROUTE_USAGE)
         return cmd_route(argv[2], argv[4])
     if command == "rename-node":
-        # 只接受「一个文件路径 + 一次分写的 --node 旧编号 + 一次分写的
-        # --to 新编号」的固定顺序：缺少路径或编号值、--node/--to 重复、
-        # 未知或额外参数、--node=编号 或 --to=编号 连写形式、两对参数
-        # 顺序颠倒，以及路径位置形似选项的记号，都在读取文件前以单行
-        # 用法说明拒绝。
-        if (len(argv) != 7 or argv[2].startswith("-")
-                or argv[3] != "--node" or argv[5] != "--to"):
-            fail(RENAME_USAGE)
-        return cmd_rename_node(argv[2], argv[4], argv[6])
+        # 固定顺序：路径 + 一次分写的 --node 旧编号 + 一次分写的 --to 新编号；
+        # 具体拒绝规则见 parse_edit_args。
+        path, (old_id, new_id) = parse_edit_args(
+            argv, ["--node", "--to"], RENAME_USAGE)
+        return cmd_rename_node(path, old_id, new_id)
     if command == "retarget-option":
-        # 只接受「一个文件路径 + 一次分写的 --node 来源编号 + 一次分写的
-        # --choice 选项编号 + 一次分写的 --to 目标编号」的固定顺序：缺少
-        # 路径或任一编号值、--node/--choice/--to 重复、未知或额外参数、
-        # --node=编号、--choice=1 或 --to=编号 连写形式、三对参数顺序
-        # 颠倒，以及路径位置形似选项的记号，都在读取文件前以单行用法
-        # 说明拒绝。
-        if (len(argv) != 9 or argv[2].startswith("-")
-                or argv[3] != "--node" or argv[5] != "--choice"
-                or argv[7] != "--to"):
-            fail(RETARGET_USAGE)
-        return cmd_retarget_option(argv[2], argv[4], argv[6], argv[8])
+        # 固定顺序：路径 + 一次分写的 --node 来源编号 + 一次分写的
+        # --choice 选项编号 + 一次分写的 --to 目标编号；具体拒绝规则见
+        # parse_edit_args。
+        path, (source_id, choice_arg, target_id) = parse_edit_args(
+            argv, ["--node", "--choice", "--to"], RETARGET_USAGE)
+        return cmd_retarget_option(path, source_id, choice_arg, target_id)
     if command == "set-node-text":
-        # 只接受「一个文件路径 + 一次分写的 --node 节点编号 + 一次分写的
-        # --text 新正文」的固定顺序：缺少路径或编号/正文值、--node/--text
-        # 重复、未知或额外参数、--node=编号 或 --text=正文 连写形式、两对
-        # 参数顺序颠倒，以及路径位置形似选项的记号，都在读取文件前以单行
-        # 用法说明拒绝。编号与正文位置的值一律照收为原字符串（包括空
-        # 字符串、纯空白与形似选项的记号），不作任何解释。
-        if (len(argv) != 7 or argv[2].startswith("-")
-                or argv[3] != "--node" or argv[5] != "--text"):
-            fail(SET_NODE_TEXT_USAGE)
-        return cmd_set_node_text(argv[2], argv[4], argv[6])
+        # 固定顺序：路径 + 一次分写的 --node 节点编号 + 一次分写的
+        # --text 新正文；具体拒绝规则见 parse_edit_args。
+        path, (node_id, new_text) = parse_edit_args(
+            argv, ["--node", "--text"], SET_NODE_TEXT_USAGE)
+        return cmd_set_node_text(path, node_id, new_text)
     fail(USAGE)
 
 
